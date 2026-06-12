@@ -82,8 +82,7 @@ async function loadAll(){
 }
 
 // ── UI HELPERS ────────────────────────────────────────────────────────────────
-const e = React.createElement;
-const {useState,useRef,useEffect,useCallback} = React;
+let e, useState, useRef, useEffect, useCallback;
 
 function fmt(n){return(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtDate(d){if(!d)return"";const[y,m,day]=d.split("-");return`${m}/${day}/${y}`;}
@@ -661,10 +660,14 @@ function App(){
 // Load React then mount
 const s1=document.createElement("script");
 s1.src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js";
+s1.async=false;
 s1.onload=()=>{
   const s2=document.createElement("script");
   s2.src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js";
+  s2.async=false;
   s2.onload=()=>{
+    e = React.createElement;
+    ({useState,useRef,useEffect,useCallback} = React);
     ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
   };
   document.head.appendChild(s2);
