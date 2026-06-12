@@ -453,6 +453,17 @@ function App(){
     setSaving(false);showToast("Employee removed ✓");
   }
 
+  async function deleteLog(id){
+    setSaving(true);
+    const rows=await sheetsGet("Logs!A:F");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Logs!A${rowIdx+1}:F${rowIdx+1}`,[['','','','','','']]);
+    }
+    await refresh();
+    setSaving(false);showToast("Log removed ✓");
+  }
+
   async function deleteUpdate(id){
     setSaving(true);
     const rows=await sheetsGet("Updates!A:H");
@@ -670,6 +681,9 @@ function App(){
                 e("p",{style:{margin:0,fontWeight:800,fontSize:18,fontFamily:"'Syne',sans-serif"}},log.hours+"h"),
                 e("p",{style:{margin:"2px 0 0",fontSize:12,color:"#D97941",fontWeight:600}},"$"+fmt(emp?emp.rate*log.hours:0))
               )
+            ),
+            e("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,marginTop:12}},
+              e("button",{onClick:()=>deleteLog(log.id),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontSize:12,fontWeight:600}},"Delete")
             )
           );
         }),
