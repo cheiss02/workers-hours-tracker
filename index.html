@@ -179,8 +179,11 @@ function ProjectSummary({project,employees,logs,updates}){
 
 // ── MAIN APP ─────────────────────────────────────────────────────────────────
 function App(){
-  const [screen,setScreen]=useState("login"); // login | loading | app
+  const [screen,setScreen]=useState("login"); // login | authorize | loading | app
   const [currentUser,setCurrentUser]=useState(null);
+  const [pendingAuth,setPendingAuth]=useState(null);
+  const pendingAuthRef=useRef(null);
+  const tokenTimeoutRef=useRef(null);
   const [data,setData]=useState({projects:[],employees:[],logs:[],users:[],updates:[]});
   const [saving,setSaving]=useState(false);
   const [toast,setToast]=useState("");
@@ -205,43 +208,51 @@ function App(){
       const payload=JSON.parse(atob(response.credential.split(".")[1]));
       const email=payload.email;
       const name=payload.name;
-      setScreen("loading");
+      pendingAuthRef.current={email,name};
+      setPendingAuth({email,name});
+      setScreen("authorize");
 
       tokenClient=google.accounts.oauth2.initTokenClient({
         client_id:CLIENT_ID,
         scope:SCOPES,
         callback: async(tokenResponse)=>{
-          clearTimeout(tokenTimeout);
+          if(tokenTimeoutRef.current){
+            clearTimeout(tokenTimeoutRef.current);
+            tokenTimeoutRef.current = null;
+          }
           if(tokenResponse.error){
             console.error("Token error", tokenResponse);
             alert("Unable to authorize Sheets access. Please try again.");
             setScreen("login");
+            pendingAuthRef.current=null;
+            setPendingAuth(null);
             return;
           }
           accessToken=tokenResponse.access_token;
           try{
             const loaded=await loadAll();
-            const found=loaded.users.find(u=>u.email.toLowerCase()===email.toLowerCase());
+            const found=loaded.users.find(u=>u.email.toLowerCase()===pendingAuthRef.current?.email.toLowerCase());
             if(!found){
               alert("Access denied. Ask the project owner to add your email.");
               setScreen("login");
+              pendingAuthRef.current=null;
+              setPendingAuth(null);
               return;
             }
-            setCurrentUser({...found,name:found.name||name});
+            setCurrentUser({...found,name:found.name||pendingAuthRef.current?.name});
             setData(loaded);
             setScreen("app");
+            pendingAuthRef.current=null;
+            setPendingAuth(null);
           }catch(err){
             console.error(err);
             alert("Error loading data. Check your Sheet is set up and API access is configured.");
             setScreen("login");
+            pendingAuthRef.current=null;
+            setPendingAuth(null);
           }
         }
       });
-      const tokenTimeout = setTimeout(()=>{
-        alert("Authorization timed out. Please allow popups and try again.");
-        setScreen("login");
-      },10000);
-      tokenClient.requestAccessToken({prompt:"consent"});
     };
 
     const renderGoogleButton = () => {
@@ -276,6 +287,31 @@ function App(){
 
     return ()=>clearInterval(interval);
   },[]);
+
+  async function requestAccess(){
+    if(!pendingAuthRef.current) return;
+    if(!tokenClient){
+      alert("Authorization is not ready yet. Please try signing in again.");
+      setScreen("login");
+      return;
+    }
+    setScreen("loading");
+    tokenTimeoutRef.current = setTimeout(()=>{
+      alert("Authorization timed out. Please allow popups and try again.");
+      setScreen("authorize");
+    },10000);
+    try{
+      tokenClient.requestAccessToken({prompt:"consent"});
+    }catch(err){
+      if(tokenTimeoutRef.current){
+        clearTimeout(tokenTimeoutRef.current);
+        tokenTimeoutRef.current=null;
+      }
+      console.error(err);
+      alert("Authorization could not start. Please allow popups and try again.");
+      setScreen("authorize");
+    }
+  }
 
   // ── REFRESH DATA
   const refresh=async()=>{
@@ -395,6 +431,16 @@ function App(){
     e("div",{id:"g_id_onload","data-client_id":CLIENT_ID,"data-callback":"handleCredentialResponse","data-auto_prompt":"false"}),
     e("div",{className:"g_id_signin","data-type":"standard","data-size":"large","data-theme":"outline","data-text":"sign_in_with","data-shape":"pill","data-width":"300"}),
     e("p",{style:{color:"#444",fontSize:11,marginTop:24,textAlign:"center"}},"Only authorized team members can sign in.")
+  );
+
+  if(screen==="authorize") return e("div",{style:{background:"#1A1A1A",minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,gap:16}},
+    e("div",{style:{background:"#D97941",borderRadius:20,width:64,height:64,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,marginBottom:24}},"🏗️"),
+    e("p",{style:{color:"#666",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:8}},"Work Tracker"),
+    e("h1",{style:{color:"#fff",fontFamily:"'Syne',sans-serif",fontSize:28,fontWeight:800,marginBottom:8,textAlign:"center"}},"Authorize Sheets Access"),
+    e("p",{style:{color:"#555",fontSize:13,marginBottom:24,textAlign:"center"}},pendingAuth?.email?`Grant Sheets access for ${pendingAuth.email}`:"Complete authorization to continue."),
+    e(Btn,{onClick:requestAccess,style:{width:260}},"Authorize Sheets"),
+    e(Btn,{variant:"ghost",onClick:()=>{setScreen("login");pendingAuthRef.current=null;setPendingAuth(null);},style:{width:260,marginTop:8}},"Back"),
+    e("p",{style:{color:"#aaa",fontSize:11,marginTop:24,textAlign:"center",maxWidth:320}},"If the authorization popup is blocked, allow popups for this site and try again.")
   );
 
   // Loading
