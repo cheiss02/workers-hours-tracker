@@ -215,7 +215,10 @@ function App(){
       tokenClient=google.accounts.oauth2.initTokenClient({
         client_id:CLIENT_ID,
         scope:SCOPES,
+        ux_mode: 'popup',
+        login_hint: email,
         callback: async(tokenResponse)=>{
+          console.log('tokenResponse', tokenResponse);
           if(tokenTimeoutRef.current){
             clearTimeout(tokenTimeoutRef.current);
             tokenTimeoutRef.current = null;
