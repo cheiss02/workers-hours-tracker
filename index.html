@@ -238,6 +238,39 @@ function App(){
       });
       tokenClient.requestAccessToken({prompt:""});
     };
+
+    const renderGoogleButton = () => {
+      if(window.google?.accounts?.id){
+        google.accounts.id.initialize({
+          client_id: CLIENT_ID,
+          callback: window.handleCredentialResponse,
+          auto_select: false,
+          cancel_on_tap_outside: false,
+        });
+        const container = document.querySelector('.g_id_signin');
+        if(container){
+          google.accounts.id.renderButton(container, {
+            type: 'standard',
+            theme: 'outline',
+            size: 'large',
+            text: 'sign_in_with',
+            shape: 'pill',
+            width: 300,
+          });
+        }
+        google.accounts.id.prompt();
+        return true;
+      }
+      return false;
+    };
+
+    const interval = setInterval(() => {
+      if(renderGoogleButton()){
+        clearInterval(interval);
+      }
+    }, 150);
+
+    return ()=>clearInterval(interval);
   },[]);
 
   // ── REFRESH DATA
