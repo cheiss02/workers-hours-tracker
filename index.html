@@ -211,6 +211,7 @@ function App(){
         client_id:CLIENT_ID,
         scope:SCOPES,
         callback: async(tokenResponse)=>{
+          clearTimeout(tokenTimeout);
           if(tokenResponse.error){
             console.error("Token error", tokenResponse);
             alert("Unable to authorize Sheets access. Please try again.");
@@ -236,7 +237,11 @@ function App(){
           }
         }
       });
-      tokenClient.requestAccessToken({prompt:""});
+      const tokenTimeout = setTimeout(()=>{
+        alert("Authorization timed out. Please allow popups and try again.");
+        setScreen("login");
+      },10000);
+      tokenClient.requestAccessToken({prompt:"consent"});
     };
 
     const renderGoogleButton = () => {
@@ -258,7 +263,6 @@ function App(){
             width: 300,
           });
         }
-        google.accounts.id.prompt();
         return true;
       }
       return false;
