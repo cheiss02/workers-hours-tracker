@@ -326,19 +326,39 @@ function App(){
   async function addProject(){
     if(!form.name?.trim())return;
     setSaving(true);
-    const id=uid();
-    const color=COLORS[data.projects.length%COLORS.length];
-    await sheetsAppend("Projects",[id,form.name.trim(),color,form.location||"",false]);
+    if(form.id){
+      const rows=await sheetsGet("Projects!A:E");
+      const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(form.id));
+      if(rowIdx>0){
+        await sheetsUpdate(`Projects!A${rowIdx+1}:D${rowIdx+1}`,[[''+form.id,form.name.trim(),form.color||rows[rowIdx][2]||COLORS[rowIdx%COLORS.length],form.location||""]]);
+      }
+      showToast("Project updated ✓");
+    } else {
+      const id=uid();
+      const color=COLORS[data.projects.length%COLORS.length];
+      await sheetsAppend("Projects",[id,form.name.trim(),color,form.location||"",false]);
+      showToast("Project added ✓");
+    }
     await refresh();
-    setSaving(false);showToast("Project added ✓");closeModal();
+    setSaving(false);closeModal();
   }
 
   async function addEmployee(){
     if(!form.name?.trim())return;
     setSaving(true);
-    await sheetsAppend("Employees",[uid(),form.name.trim(),parseFloat(form.rate)||0]);
+    if(form.id){
+      const rows=await sheetsGet("Employees!A:C");
+      const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(form.id));
+      if(rowIdx>0){
+        await sheetsUpdate(`Employees!A${rowIdx+1}:C${rowIdx+1}`,[[''+form.id,form.name.trim(),parseFloat(form.rate)||0]]);
+      }
+      showToast("Employee updated ✓");
+    } else {
+      await sheetsAppend("Employees",[uid(),form.name.trim(),parseFloat(form.rate)||0]);
+      showToast("Employee added ✓");
+    }
     await refresh();
-    setSaving(false);showToast("Employee added ✓");closeModal();
+    setSaving(false);closeModal();
   }
 
   async function logHours(){
@@ -354,9 +374,19 @@ function App(){
     if(!form.note?.trim()&&!form.photo)return;
     if(!form.pId)return;
     setSaving(true);
-    await sheetsAppend("Updates",[uid(),parseInt(form.pId),isSpend?"spend":"update",form.date||today(),form.note||"",isSpend?parseFloat(form.amount)||0:"","",currentUser.name]);
+    if(form.id){
+      const rows=await sheetsGet("Updates!A:H");
+      const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(form.id));
+      if(rowIdx>0){
+        await sheetsUpdate(`Updates!A${rowIdx+1}:H${rowIdx+1}`,[[''+form.id,parseInt(form.pId),isSpend?"spend":"update",form.date||today(),form.note||"",isSpend?parseFloat(form.amount)||0:"",form.photo||"",currentUser.name]]);
+      }
+      showToast("Entry updated ✓");
+    } else {
+      await sheetsAppend("Updates",[uid(),parseInt(form.pId),isSpend?"spend":"update",form.date||today(),form.note||"",isSpend?parseFloat(form.amount)||0:"",form.photo||"",currentUser.name]);
+      showToast("Entry saved ✓");
+    }
     await refresh();
-    setSaving(false);showToast("Entry saved ✓");closeModal();
+    setSaving(false);closeModal();
   }
 
   async function closeProject(id){
@@ -395,10 +425,58 @@ function App(){
     const rows=await sheetsGet("Users!A:D");
     const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
     if(rowIdx>0){
-      await sheetsUpdate(`Users!A${rowIdx+1}:D${rowIdx+1}`,[["","","","removed"]]);
+      await sheetsUpdate(`Users!A${rowIdx+1}:D${rowIdx+1}`,[['','','','removed']]);
     }
     await refresh();
     setSaving(false);showToast("User removed ✓");
+  }
+
+  async function deleteProject(id){
+    setSaving(true);
+    const rows=await sheetsGet("Projects!A:E");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Projects!A${rowIdx+1}:E${rowIdx+1}`,[['','','','','']]);
+    }
+    await refresh();
+    setSaving(false);showToast("Project removed ✓");
+  }
+
+  async function deleteEmployee(id){
+    setSaving(true);
+    const rows=await sheetsGet("Employees!A:C");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Employees!A${rowIdx+1}:C${rowIdx+1}`,[['','','']]);
+    }
+    await refresh();
+    setSaving(false);showToast("Employee removed ✓");
+  }
+
+  async function deleteUpdate(id){
+    setSaving(true);
+    const rows=await sheetsGet("Updates!A:H");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Updates!A${rowIdx+1}:H${rowIdx+1}`,[['','','','','','','','']]);
+    }
+    await refresh();
+    setSaving(false);showToast("Update removed ✓");
+  }
+
+  function editProject(project){
+    setForm({id:project.id,name:project.name,location:project.location,color:project.color});
+    setModal("addProject");
+  }
+
+  function editEmployee(emp){
+    setForm({id:emp.id,name:emp.name,rate:emp.rate});
+    setModal("addEmployee");
+  }
+
+  function editUpdate(entry){
+    setForm({id:entry.id,pId:entry.projectId,utype:entry.type,date:entry.date,note:entry.note,amount:entry.amount,photo:entry.photo});
+    setModal("addEntry");
   }
 
   // ── PDF EXPORT
@@ -536,13 +614,17 @@ function App(){
                       e("button",{onClick:()=>closeProject(p.id),style:{padding:"6px 12px",borderRadius:10,border:"none",background:"#1A1A1A",color:"#fff",fontSize:12,fontWeight:700}},saving?"…":"Yes, Close")
                     )
                   : e("button",{onClick:()=>setConfirmId(p.id),style:{width:"100%",padding:"9px",borderRadius:12,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontWeight:600,fontSize:13}},"✕ Close Project")
-                : e("button",{onClick:()=>reopenProject(p.id),style:{width:"100%",padding:"9px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontWeight:600,fontSize:13}},saving?"…":"↩ Reopen Project")
+                : e("button",{onClick:()=>reopenProject(p.id),style:{width:"100%",padding:"9px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontWeight:600,fontSize:13}},saving?"…":"↩ Reopen Project"),
+              e("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}},
+                e("button",{onClick:()=>editProject(p),style:{flex:1,padding:"9px",borderRadius:12,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontWeight:600,fontSize:13}},"Edit"),
+                e("button",{onClick:()=>deleteProject(p.id),style:{flex:1,padding:"9px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontWeight:600,fontSize:13}},"Delete")
+              )
             ),
             e("button",{onClick:()=>setExpanded(ex=>({...ex,[p.id]:!ex[p.id]})),style:{width:"100%",marginTop:10,padding:"9px",borderRadius:12,border:"none",background:isExp?"#1A1A1A":"#F0EDE9",color:isExp?"#D97941":"#888",fontWeight:600,fontSize:13}},isExp?"▲ Hide Summary":"▼ View Project Summary"),
             isExp&&e(ProjectSummary,{project:p,employees:data.employees,logs:data.logs,updates:data.updates})
           );
         }),
-        pFilter==="active"&&e(Btn,{onClick:()=>setModal("addProject"),style:{marginTop:4}},"+ Add Project")
+        pFilter===\"active\"&&e(Btn,{onClick:()=>{setForm({});setModal(\"addProject\");},style:{marginTop:4}},"+ Add Project")
       ),
 
       // EMPLOYEES
@@ -557,6 +639,10 @@ function App(){
               e("p",{style:{margin:"2px 0 4px",fontSize:12,color:"#888"}},"$"+emp.rate+"/hr"),
               e("div",{style:{display:"flex",gap:4,flexWrap:"wrap"}},
                 pIds.map(pid=>{const proj=data.projects.find(p=>String(p.id)===String(pid));return proj?e("span",{key:pid,style:{background:proj.color+"22",color:proj.color,fontSize:10,padding:"2px 8px",borderRadius:8,fontWeight:600}},proj.name):null;})
+              ),
+              e("div",{style:{display:"flex",gap:8,marginTop:10}},
+                e("button",{onClick:()=>editEmployee(emp),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontSize:12,fontWeight:600}},"Edit"),
+                e("button",{onClick:()=>deleteEmployee(emp.id),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontSize:12,fontWeight:600}},"Delete")
               )
             ),
             e("div",{style:{textAlign:"right"}},
@@ -610,6 +696,10 @@ function App(){
                   e("p",{style:{margin:"2px 0 0",fontSize:11,color:"#aaa"}},fmtDate(u.date)+" · "+u.author)
                 ),
                 e("p",{style:{margin:0,fontWeight:800,fontSize:18,fontFamily:"'Syne',sans-serif",color:"#4A9E6B",marginLeft:8}},"$"+fmt(u.amount))
+              ),
+              e("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,marginTop:12}},
+                e("button",{onClick:()=>editUpdate(u),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontSize:12,fontWeight:600}},"Edit"),
+                e("button",{onClick:()=>deleteUpdate(u.id),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontSize:12,fontWeight:600}},"Delete")
               )
             );
           })
@@ -623,12 +713,17 @@ function App(){
                 proj&&e(Badge,{label:proj.name,color:proj.color}),
                 e("p",{style:{margin:0,fontSize:11,color:"#aaa"}},fmtDate(u.date)+" · "+u.author)
               ),
-              u.note&&e("p",{style:{margin:0,fontSize:13,lineHeight:1.5}},u.note)
+              u.note&&e("p",{style:{margin:0,fontSize:13,lineHeight:1.5}},u.note),
+              u.photo&&u.photo.startsWith("http")&&e("img",{src:u.photo,style:{width:"100%",borderRadius:8,marginTop:10,maxHeight:140,objectFit:"cover"}}),
+              e("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,marginTop:12}},
+                e("button",{onClick:()=>editUpdate(u),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontSize:12,fontWeight:600}},"Edit"),
+                e("button",{onClick:()=>deleteUpdate(u.id),style:{padding:"8px 12px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontSize:12,fontWeight:600}},"Delete")
+              )
             );
           })
         ),
         data.updates.filter(u=>!selProjId||String(u.projectId)===String(selProjId)).length===0&&e("div",{style:{textAlign:"center",padding:"48px 0",color:"#BBB"}},e("p",{style:{fontSize:36,margin:"0 0 8px"}},"📋"),e("p",{style:{fontSize:13}},"No entries yet.")),
-        e(Btn,{variant:"orange",onClick:()=>{setForm({utype:"update",pId:selProjId||(activePr[0]?.id),date:today()});setModal("addEntry");},style:{marginTop:8}},"+ Add Entry")
+        e(Btn,{variant:"orange",onClick:()=>{setForm({utype:"update",pId:selProjId||(activePr[0]?.id),date:today(),photo:""});setModal("addEntry");},style:{marginTop:8}},"+ Add Entry")
       ),
 
       // SUMMARY
@@ -672,16 +767,16 @@ function App(){
     e("button",{onClick:()=>setModal("users"),style:{position:"fixed",bottom:90,right:20,background:"#1A1A1A",border:"none",borderRadius:"50%",width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",zIndex:50}},"👥"),
 
     // MODALS
-    e(Modal,{show:modal==="addProject",onClose:closeModal,title:"New Project"},
+    e(Modal,{show:modal==="addProject",onClose:closeModal,title:form.id?"Edit Project":"New Project"},
       e(Field,{label:"Project Name"},e(Inp,{placeholder:"e.g. Riverside Build",value:form.name||"",onChange:ev=>sf("name",ev.target.value)})),
       e(Field,{label:"Location"},e(Inp,{placeholder:"e.g. Riverside, CA",value:form.location||"",onChange:ev=>sf("location",ev.target.value)})),
-      e(Btn,{onClick:addProject,disabled:saving||!form.name?.trim()},saving?"Saving…":"Save Project")
+      e(Btn,{onClick:addProject,disabled:saving||!form.name?.trim()},saving?"Saving…":form.id?"Update Project":"Save Project")
     ),
 
-    e(Modal,{show:modal==="addEmployee",onClose:closeModal,title:"New Employee"},
+    e(Modal,{show:modal==="addEmployee",onClose:closeModal,title:form.id?"Edit Employee":"New Employee"},
       e(Field,{label:"Full Name"},e(Inp,{placeholder:"Name",value:form.name||"",onChange:ev=>sf("name",ev.target.value)})),
       e(Field,{label:"Hourly Rate ($)"},e(Inp,{type:"number",placeholder:"28",value:form.rate||"",onChange:ev=>sf("rate",ev.target.value)})),
-      e(Btn,{onClick:addEmployee,disabled:saving||!form.name?.trim()},saving?"Saving…":"Save Employee")
+      e(Btn,{onClick:addEmployee,disabled:saving||!form.name?.trim()},saving?"Saving…":form.id?"Update Employee":"Save Employee")
     ),
 
     e(Modal,{show:modal==="logHours",onClose:closeModal,title:"Log Hours"},
@@ -695,7 +790,7 @@ function App(){
       e(Btn,{onClick:logHours,disabled:saving||!form.eId||!form.pId||!form.date},saving?"Saving…":"Save Hours")
     ),
 
-    e(Modal,{show:modal==="addEntry",onClose:closeModal,title:"Add Entry"},
+    e(Modal,{show:modal==="addEntry",onClose:closeModal,title:form.id?"Edit Entry":"Add Entry"},
       e("div",{style:{display:"flex",background:"#F0EDE9",borderRadius:14,padding:4,marginBottom:16}},
         [["update","📋 Site Update"],["spend","🧾 Log Spend"]].map(([val,lbl])=>
           e("button",{key:val,onClick:()=>sf("utype",val),style:{flex:1,padding:"9px",border:"none",borderRadius:11,background:form.utype===val?"#1A1A1A":"transparent",color:form.utype===val?"#fff":"#888",fontWeight:700,fontSize:13}},lbl)
@@ -704,10 +799,11 @@ function App(){
       e(Field,{label:"Project"},e(Sel,{value:form.pId||"",onChange:ev=>sf("pId",ev.target.value)},e("option",{value:""},"Select project…"),data.projects.map(x=>e("option",{key:x.id,value:x.id},x.name+(x.closed?" (closed)":""))))),
       e(Field,{label:"Date"},e(Inp,{type:"date",value:form.date||today(),onChange:ev=>sf("date",ev.target.value)})),
       form.utype==="spend"&&e(Field,{label:"Amount ($)"},e(Inp,{type:"number",placeholder:"0.00",value:form.amount||"",onChange:ev=>sf("amount",ev.target.value)})),
+      e(Field,{label:"Photo URL"},e(Inp,{type:"url",placeholder:"https://...",value:form.photo||"",onChange:ev=>sf("photo",ev.target.value)})),
       e(Field,{label:form.utype==="spend"?"Description":"Note / Update"},
         e("textarea",{placeholder:form.utype==="spend"?"e.g. Lumber delivery…":"Site update, observations…",value:form.note||"",onChange:ev=>sf("note",ev.target.value),style:{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #E8E4DF",fontSize:14,boxSizing:"border-box",outline:"none",minHeight:80,resize:"vertical"}})
       ),
-      e(Btn,{onClick:addEntry,disabled:saving||(!form.note?.trim()&&!form.photo)},saving?"Saving…":"Save Entry")
+      e(Btn,{onClick:addEntry,disabled:saving||(!form.note?.trim()&&!form.photo)},saving?"Saving…":form.id?"Update Entry":"Save Entry")
     ),
 
     e(Modal,{show:modal==="exportPDF",onClose:closeModal,title:"Export Report"},
