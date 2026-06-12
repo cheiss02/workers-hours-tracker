@@ -194,11 +194,19 @@ function App(){
   const [confirmId,setConfirmId]=useState(null);
   const [selProjId,setSelProjId]=useState(null);
   const [form,setForm]=useState({});
+  const [photoPreview,setPhotoPreview]=useState("");
   const photoRef=useRef();
 
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(""),2500);};
-  const closeModal=()=>{setModal(null);setForm({});};
+  const closeModal=()=>{setModal(null);setForm({});setPhotoPreview("");if(photoRef.current)photoRef.current.value="";};
   const sf=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const loadPhotoFile=file=>{
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{sf("photo",reader.result);setPhotoPreview(reader.result);};
+    reader.readAsDataURL(file);
+  };
+  const clearPhoto=()=>{sf("photo","");setPhotoPreview("");if(photoRef.current)photoRef.current.value="";};
   const activePr=data.projects.filter(p=>!p.closed);
   const filteredPr=pFilter==="active"?activePr:data.projects.filter(p=>p.closed);
 
@@ -487,6 +495,7 @@ function App(){
 
   function editUpdate(entry){
     setForm({id:entry.id,pId:entry.projectId,utype:entry.type,date:entry.date,note:entry.note,amount:entry.amount,photo:entry.photo});
+    setPhotoPreview(entry.photo||"");
     setModal("addEntry");
   }
 
@@ -737,7 +746,7 @@ function App(){
           })
         ),
         data.updates.filter(u=>!selProjId||String(u.projectId)===String(selProjId)).length===0&&e("div",{style:{textAlign:"center",padding:"48px 0",color:"#BBB"}},e("p",{style:{fontSize:36,margin:"0 0 8px"}},"📋"),e("p",{style:{fontSize:13}},"No entries yet.")),
-        e(Btn,{variant:"orange",onClick:()=>{setForm({utype:"update",pId:selProjId||(activePr[0]?.id),date:today(),photo:""});setModal("addEntry");},style:{marginTop:8}},"+ Add Entry")
+        e(Btn,{variant:"orange",onClick:()=>{setForm({utype:"update",pId:selProjId||(activePr[0]?.id),date:today(),photo:""});setPhotoPreview("");setModal("addEntry");},style:{marginTop:8}},"+ Add Entry")
       ),
 
       // SUMMARY
@@ -813,7 +822,15 @@ function App(){
       e(Field,{label:"Project"},e(Sel,{value:form.pId||"",onChange:ev=>sf("pId",ev.target.value)},e("option",{value:""},"Select project…"),data.projects.map(x=>e("option",{key:x.id,value:x.id},x.name+(x.closed?" (closed)":""))))),
       e(Field,{label:"Date"},e(Inp,{type:"date",value:form.date||today(),onChange:ev=>sf("date",ev.target.value)})),
       form.utype==="spend"&&e(Field,{label:"Amount ($)"},e(Inp,{type:"number",placeholder:"0.00",value:form.amount||"",onChange:ev=>sf("amount",ev.target.value)})),
-      e(Field,{label:"Photo URL"},e(Inp,{type:"url",placeholder:"https://...",value:form.photo||"",onChange:ev=>sf("photo",ev.target.value)})),
+      e(Field,{label:"Photo"},
+        e("div",{style:{display:"grid",gap:10}},
+          e("input",{ref:photoRef,type:"file",accept:"image/*",capture:"environment",onChange:ev=>loadPhotoFile(ev.target.files[0]),style:{width:"100%"}}),
+          e("p",{style:{margin:0,fontSize:12,color:"#888"}},"Or paste an image URL below"),
+          e(Inp,{type:"url",placeholder:"https://...",value:form.photo||"",onChange:ev=>{sf("photo",ev.target.value);setPhotoPreview(ev.target.value||"");}})
+        )
+      ),
+      photoPreview&&e("img",{src:photoPreview,style:{width:"100%",borderRadius:12,marginTop:8,maxHeight:180,objectFit:"cover"}}),
+      photoPreview&&e("button",{type:"button",onClick:clearPhoto,style:{border:"none",background:"transparent",color:"#D97941",fontSize:12,fontWeight:700,marginTop:8,cursor:"pointer"}},"Remove photo"),
       e(Field,{label:form.utype==="spend"?"Description":"Note / Update"},
         e("textarea",{placeholder:form.utype==="spend"?"e.g. Lumber delivery…":"Site update, observations…",value:form.note||"",onChange:ev=>sf("note",ev.target.value),style:{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #E8E4DF",fontSize:14,boxSizing:"border-box",outline:"none",minHeight:80,resize:"vertical"}})
       ),
