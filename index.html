@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>Work Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+<!-- Google Sign-In -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:#F5F2EE;min-height:100vh;}
+#root{max-width:430px;margin:0 auto;position:relative;min-height:100vh;}
+button{font-family:'DM Sans',sans-serif;cursor:pointer;}
+input,select,textarea{font-family:'DM Sans',sans-serif;}
+::-webkit-scrollbar{width:0;}
+.spin{animation:spin 1s linear infinite;}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888;font-size:14px;">Loading…</div></div>
+
+<script>
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const SHEET_ID   = "1ylCpXKA8aU7QdeKk8gsXu0A41p_j9ZF2-tB7VYSrr-o";
+const API_KEY    = "AIzaSyBXSOLF3PnLmJJ3fX45D6xoay3uadtr7v8";
+const CLIENT_ID  = "748653707462-2npcd2lv25f2b8dom4fug52lo3osvg27.apps.googleusercontent.com";
+const SCOPES     = "https://www.googleapis.com/auth/spreadsheets";
+const DISCOVERY  = "https://sheets.googleapis.com/$discovery/rest?version=v4";
+
+// ── SHEETS HELPERS ────────────────────────────────────────────────────────────
+let gapiReady = false;
+let tokenClient = null;
+let accessToken = null;
+
+async function sheetsGet(range){
+  const url=`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?key=${API_KEY}`;
+  const r=await fetch(url,{headers:accessToken?{Authorization:"Bearer "+accessToken}:{}});
+  const d=await r.json();
+  return d.values||[];
+}
+
+async function sheetsAppend(sheetName, row){
+  const url=`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(sheetName+"!A1")}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS&key=${API_KEY}`;
+  await fetch(url,{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+accessToken},body:JSON.stringify({values:[row]})});
+}
+
+async function sheetsUpdate(range, values){
+  const url=`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW&key=${API_KEY}`;
+  await fetch(url,{method:"PUT",headers:{"Content-Type":"application/json",Authorization:"Bearer "+accessToken},body:JSON.stringify({values})});
+}
+
+async function sheetsFindRow(sheetName, colIndex, value){
+  const rows = await sheetsGet(sheetName+"!A:Z");
+  const idx = rows.findIndex((r,i)=>i>0&&r[colIndex]===String(value));
+  return idx; // 0-based index in rows array, -1 if not found
+}
+
+// Parse sheet rows (skip header row 0)
+function parseRows(rows, keys){
+  if(rows.length<2) return [];
+  return rows.slice(1).map(r=>Object.fromEntries(keys.map((k,i)=>[k,r[i]||""])));
+}
+
+// ── DATA LOAD ─────────────────────────────────────────────────────────────────
+async function loadAll(){
+  const [pRows,eRows,lRows,uRows,upRows] = await Promise.all([
+    sheetsGet("Projects!A:E"),
+    sheetsGet("Employees!A:C"),
+    sheetsGet("Logs!A:G"),
+    sheetsGet("Users!A:D"),
+    sheetsGet("Updates!A:H"),
+  ]);
+  return {
+    projects: parseRows(pRows,["id","name","color","location","closed"]).map(p=>({...p,closed:p.closed==="true"})),
+    employees: parseRows(eRows,["id","name","rate"]).map(e=>({...e,rate:parseFloat(e.rate)||0,id:parseInt(e.id)})),
+    logs: parseRows(lRows,["id","employeeId","projectId","date","hours","location"]).map(l=>({...l,employeeId:parseInt(l.employeeId),projectId:parseInt(l.projectId),hours:parseFloat(l.hours)||0,id:parseInt(l.id)})),
+    users: parseRows(uRows,["id","name","email","role"]),
+    updates: parseRows(upRows,["id","projectId","type","date","note","amount","photo","author"]).map(u=>({...u,projectId:parseInt(u.projectId),amount:parseFloat(u.amount)||0,id:parseInt(u.id)})),
+  };
+}
+
+// ── UI HELPERS ────────────────────────────────────────────────────────────────
+const e = React.createElement;
+const {useState,useRef,useEffect,useCallback} = React;
+
+function fmt(n){return(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtDate(d){if(!d)return"";const[y,m,day]=d.split("-");return`${m}/${day}/${y}`;}
+function today(){return new Date().toISOString().split("T")[0];}
+function uid(){return Date.now();}
+const COLORS=["#D97941","#4A8FA4","#7C6F9F","#4A9E6B","#C0504D","#4472C4","#F79646","#70AD47"];
+const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function getDates(start,end){const dates=[];let cur=new Date(start+"T00:00:00");const endD=new Date(end+"T00:00:00");while(cur<=endD){dates.push(cur.toISOString().split("T")[0]);cur.setDate(cur.getDate()+1);}return dates;}
+
+function Avatar({name,size=36,bg="#1A1A1A",col="#D97941"}){return e("div",{style:{width:size,height:size,borderRadius:"50%",background:bg,display:"flex",alignItems:"center",justifyContent:"center",color:col,fontWeight:800,fontSize:size*0.4,flexShrink:0}},name?.charAt(0).toUpperCase());}
+function Badge({label,color="#888",bg}){return e("span",{style:{background:bg||color+"22",color,fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:8,letterSpacing:0.5,whiteSpace:"nowrap"}},label);}
+function Pill({label,active,onClick}){return e("button",{onClick,style:{padding:"9px 0",border:"none",borderRadius:11,flex:1,background:active?"#1A1A1A":"transparent",color:active?"#fff":"#888",fontWeight:700,fontSize:13}},label);}
+function Inp(p){return e("input",{...p,style:{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #E8E4DF",fontSize:14,boxSizing:"border-box",outline:"none",background:"#fff",...p.style}});}
+function Sel({children,...p}){return e("select",{...p,style:{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #E8E4DF",fontSize:14,background:"#fff",outline:"none",...p.style}},children);}
+function Btn({children,variant="dark",onClick,disabled,style:s={}}){
+  const V={dark:{background:"#1A1A1A",color:"#fff"},orange:{background:"#D97941",color:"#fff"},ghost:{background:"#F0EDE9",color:"#555"},outline:{background:"#fff",color:"#666",border:"1.5px solid #E8E4DF"},green:{background:"#F0F7F0",color:"#4A9E6B",border:"1.5px solid #4A9E6B"}};
+  return e("button",{onClick,disabled,style:{width:"100%",padding:"13px",border:"none",borderRadius:14,fontWeight:700,fontSize:14,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.5:1,...V[variant],...s}},children);
+}
+function Field({label,children}){return e("div",{style:{marginBottom:14}},e("label",{style:{fontSize:12,color:"#888",display:"block",marginBottom:6,fontWeight:600}},label),children);}
+function Modal({show,onClose,title,children}){
+  if(!show)return null;
+  return e("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"flex-end",zIndex:200},onClick:onClose},
+    e("div",{style:{background:"#fff",borderRadius:"24px 24px 0 0",padding:"24px 20px 44px",width:"100%",maxHeight:"88vh",overflowY:"auto",boxSizing:"border-box"},onClick:ev=>ev.stopPropagation()},
+      e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}},
+        e("h2",{style:{margin:0,fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800}},title),
+        e("button",{onClick:onClose,style:{background:"#F0EDE9",border:"none",borderRadius:10,width:32,height:32,fontSize:16,color:"#666"}},"✕")
+      ),
+      children
+    )
+  );
+}
+function Toast({msg}){
+  if(!msg)return null;
+  return e("div",{style:{position:"fixed",bottom:100,left:"50%",transform:"translateX(-50%)",background:"#1A1A1A",color:"#fff",padding:"10px 20px",borderRadius:20,fontSize:13,fontWeight:600,zIndex:300,whiteSpace:"nowrap",boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}},msg);
+}
+
+// ── PROJECT SUMMARY ───────────────────────────────────────────────────────────
+function ProjectSummary({project,employees,logs,updates}){
+  const pLogs=logs.filter(l=>l.projectId===project.id);
+  const spends=updates.filter(u=>u.projectId===project.id&&u.type==="spend").sort((a,b)=>b.date.localeCompare(a.date));
+  const siteUpd=updates.filter(u=>u.projectId===project.id&&u.type==="update").sort((a,b)=>b.date.localeCompare(a.date));
+  const byEmp=employees.map(emp=>{const h=pLogs.filter(l=>l.employeeId===emp.id).reduce((s,l)=>s+l.hours,0);return{...emp,hours:h,salary:emp.rate*h};}).filter(x=>x.hours>0);
+  const totalSalary=byEmp.reduce((s,x)=>s+x.salary,0);
+  const totalSpend=spends.reduce((s,u)=>s+(u.amount||0),0);
+  const SL=({t})=>e("p",{style:{margin:"0 0 8px",fontSize:10,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:"#AAA"}},t);
+  return e("div",{style:{marginTop:14,borderTop:"1px solid #F0EDE9",paddingTop:14}},
+    e(SL,{t:"💰 Salary Paid"}),
+    e("div",{style:{background:"#F9F7F5",borderRadius:12,overflow:"hidden",marginBottom:16}},
+      byEmp.length===0?e("p",{style:{margin:0,padding:"12px",fontSize:12,color:"#AAA",textAlign:"center"}},"No hours logged yet"):
+      e(React.Fragment,null,
+        byEmp.map((emp,i)=>e("div",{key:emp.id,style:{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderBottom:i<byEmp.length-1?"1px solid #F0EDE9":"none"}},
+          e(Avatar,{name:emp.name,size:28}),
+          e("div",{style:{flex:1}},e("p",{style:{margin:0,fontSize:13,fontWeight:600}},emp.name),e("p",{style:{margin:0,fontSize:11,color:"#AAA"}},`${emp.hours}h × $${emp.rate}/hr`)),
+          e("p",{style:{margin:0,fontWeight:700,fontSize:14}},"$"+fmt(emp.salary))
+        )),
+        e("div",{style:{display:"flex",justifyContent:"space-between",padding:"10px 12px",background:"#1A1A1A",borderRadius:"0 0 12px 12px"}},
+          e("p",{style:{margin:0,fontSize:12,fontWeight:700,color:"#fff"}},"Total Salary"),
+          e("p",{style:{margin:0,fontSize:14,fontWeight:800,color:"#D97941"}},"$"+fmt(totalSalary))
+        )
+      )
+    ),
+    e(SL,{t:"🧾 Receipts & Expenses"}),
+    e("div",{style:{background:"#F9F7F5",borderRadius:12,overflow:"hidden",marginBottom:16}},
+      spends.length===0?e("p",{style:{margin:0,padding:"12px",fontSize:12,color:"#AAA",textAlign:"center"}},"No expenses logged yet"):
+      e(React.Fragment,null,
+        spends.map((u,i)=>e("div",{key:u.id,style:{padding:"10px 12px",borderBottom:i<spends.length-1?"1px solid #F0EDE9":"none"}},
+          e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+            e("div",{style:{flex:1}},e("p",{style:{margin:0,fontSize:13,fontWeight:600}},u.note),e("p",{style:{margin:"2px 0 0",fontSize:11,color:"#AAA"}},fmtDate(u.date)+" · "+u.author)),
+            e("p",{style:{margin:0,fontWeight:700,fontSize:14,color:"#4A9E6B",marginLeft:8}},"$"+fmt(u.amount))
+          ),
+          u.photo&&u.photo.startsWith("http")&&e("img",{src:u.photo,style:{width:"100%",borderRadius:8,marginTop:8,maxHeight:120,objectFit:"cover"}})
+        )),
+        e("div",{style:{display:"flex",justifyContent:"space-between",padding:"10px 12px",background:"#1A1A1A",borderRadius:"0 0 12px 12px"}},
+          e("p",{style:{margin:0,fontSize:12,fontWeight:700,color:"#fff"}},"Total Expenses"),
+          e("p",{style:{margin:0,fontSize:14,fontWeight:800,color:"#4A9E6B"}},"$"+fmt(totalSpend))
+        )
+      )
+    ),
+    e(SL,{t:"📅 Project Timeline"}),
+    siteUpd.length===0?e("p",{style:{fontSize:12,color:"#AAA",textAlign:"center",padding:"8px 0 4px"}},"No updates logged yet"):
+    e("div",{style:{position:"relative"}},
+      e("div",{style:{position:"absolute",left:15,top:0,bottom:0,width:2,background:"#E8E4DF",borderRadius:2}}),
+      siteUpd.map(u=>e("div",{key:u.id,style:{display:"flex",gap:12,marginBottom:14,position:"relative"}},
+        e("div",{style:{width:30,height:30,borderRadius:"50%",background:project.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,flexShrink:0,zIndex:1,border:"3px solid #F5F2EE"}},"📋"),
+        e("div",{style:{flex:1,background:"#fff",borderRadius:12,padding:"10px 12px",boxShadow:"0 1px 6px rgba(0,0,0,0.06)"}},
+          e("p",{style:{margin:"0 0 4px",fontSize:11,color:"#AAA",fontWeight:600}},fmtDate(u.date)+" · "+u.author),
+          e("p",{style:{margin:0,fontSize:13,color:"#1A1A1A",lineHeight:1.5}},u.note),
+          u.photo&&u.photo.startsWith("http")&&e("img",{src:u.photo,style:{width:"100%",borderRadius:8,marginTop:8,maxHeight:140,objectFit:"cover"}})
+        )
+      ))
+    )
+  );
+}
+
+// ── MAIN APP ─────────────────────────────────────────────────────────────────
+function App(){
+  const [screen,setScreen]=useState("login"); // login | loading | app
+  const [currentUser,setCurrentUser]=useState(null);
+  const [data,setData]=useState({projects:[],employees:[],logs:[],users:[],updates:[]});
+  const [saving,setSaving]=useState(false);
+  const [toast,setToast]=useState("");
+  const [tab,setTab]=useState("Projects");
+  const [pFilter,setPFilter]=useState("active");
+  const [expanded,setExpanded]=useState({});
+  const [modal,setModal]=useState(null);
+  const [confirmId,setConfirmId]=useState(null);
+  const [selProjId,setSelProjId]=useState(null);
+  const [form,setForm]=useState({});
+  const photoRef=useRef();
+
+  const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(""),2500);};
+  const closeModal=()=>{setModal(null);setForm({});};
+  const sf=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const activePr=data.projects.filter(p=>!p.closed);
+  const filteredPr=pFilter==="active"?activePr:data.projects.filter(p=>p.closed);
+
+  // ── GOOGLE SIGN-IN
+  useEffect(()=>{
+    window.handleCredentialResponse=async(response)=>{
+      const payload=JSON.parse(atob(response.credential.split(".")[1]));
+      const email=payload.email;
+      const name=payload.name;
+      setScreen("loading");
+      // Get access token for Sheets write
+      tokenClient=google.accounts.oauth2.initTokenClient({
+        client_id:CLIENT_ID,
+        scope:SCOPES,
+        callback:(tokenResponse)=>{
+          accessToken=tokenResponse.access_token;
+        }
+      });
+      tokenClient.requestAccessToken({prompt:""});
+      // Load data and check user
+      try{
+        const loaded=await loadAll();
+        const found=loaded.users.find(u=>u.email.toLowerCase()===email.toLowerCase());
+        if(!found){
+          alert("Access denied. Ask the project owner to add your email.");
+          setScreen("login");
+          return;
+        }
+        setCurrentUser({...found,name:found.name||name});
+        setData(loaded);
+        setScreen("app");
+      }catch(err){
+        console.error(err);
+        alert("Error loading data. Check your Sheet is set up and API key is valid.");
+        setScreen("login");
+      }
+    };
+  },[]);
+
+  // ── REFRESH DATA
+  const refresh=async()=>{
+    const loaded=await loadAll();
+    setData(loaded);
+  };
+
+  // ── ACTIONS
+  async function addProject(){
+    if(!form.name?.trim())return;
+    setSaving(true);
+    const id=uid();
+    const color=COLORS[data.projects.length%COLORS.length];
+    await sheetsAppend("Projects",[id,form.name.trim(),color,form.location||"",false]);
+    await refresh();
+    setSaving(false);showToast("Project added ✓");closeModal();
+  }
+
+  async function addEmployee(){
+    if(!form.name?.trim())return;
+    setSaving(true);
+    await sheetsAppend("Employees",[uid(),form.name.trim(),parseFloat(form.rate)||0]);
+    await refresh();
+    setSaving(false);showToast("Employee added ✓");closeModal();
+  }
+
+  async function logHours(){
+    if(!form.eId||!form.pId||!form.date)return;
+    setSaving(true);
+    await sheetsAppend("Logs",[uid(),parseInt(form.eId),parseInt(form.pId),form.date,parseFloat(form.hours)||0,form.location||""]);
+    await refresh();
+    setSaving(false);showToast("Hours logged ✓");closeModal();
+  }
+
+  async function addEntry(){
+    const isSpend=form.utype==="spend";
+    if(!form.note?.trim()&&!form.photo)return;
+    if(!form.pId)return;
+    setSaving(true);
+    await sheetsAppend("Updates",[uid(),parseInt(form.pId),isSpend?"spend":"update",form.date||today(),form.note||"",isSpend?parseFloat(form.amount)||0:"","",currentUser.name]);
+    await refresh();
+    setSaving(false);showToast("Entry saved ✓");closeModal();
+  }
+
+  async function closeProject(id){
+    setSaving(true);
+    const rows=await sheetsGet("Projects!A:E");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Projects!E${rowIdx+1}`,[[true]]);
+    }
+    await refresh();
+    setSaving(false);setConfirmId(null);showToast("Project closed ✓");
+  }
+
+  async function reopenProject(id){
+    setSaving(true);
+    const rows=await sheetsGet("Projects!A:E");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Projects!E${rowIdx+1}`,[[false]]);
+    }
+    await refresh();
+    setSaving(false);showToast("Project reopened ✓");
+  }
+
+  async function addUser(){
+    if(!form.name?.trim()||!form.email?.trim())return;
+    setSaving(true);
+    await sheetsAppend("Users",[uid(),form.name.trim(),form.email.trim(),form.role||"Manager"]);
+    await refresh();
+    setSaving(false);showToast("User added ✓");closeModal();
+  }
+
+  async function removeUser(id){
+    // Mark as removed by clearing row (simple approach)
+    setSaving(true);
+    const rows=await sheetsGet("Users!A:D");
+    const rowIdx=rows.findIndex((r,i)=>i>0&&r[0]===String(id));
+    if(rowIdx>0){
+      await sheetsUpdate(`Users!A${rowIdx+1}:D${rowIdx+1}`,[["","","","removed"]]);
+    }
+    await refresh();
+    setSaving(false);showToast("User removed ✓");
+  }
+
+  // ── PDF EXPORT
+  function exportPDF(){
+    const proj=data.projects.find(p=>String(p.id)===String(selProjId)||p.id===selProjId);
+    if(!proj||!form.startDate||!form.endDate)return;
+    const dates=getDates(form.startDate,form.endDate);
+    const pLogs=data.logs.filter(l=>String(l.projectId)===String(proj.id)||l.projectId===proj.id);
+    const usedEmps=data.employees.filter(e=>[...new Set(pLogs.map(l=>l.employeeId))].map(String).includes(String(e.id)));
+    const rows=usedEmps.map(emp=>{const dh=dates.map(d=>{const l=pLogs.find(x=>String(x.employeeId)===String(emp.id)&&x.date===d);return l?l.hours:"-";});const tot=dh.reduce((s,h)=>s+(h==="-"?0:h),0);return{emp,dh,tot};});
+    const grandH=rows.reduce((s,r)=>s+r.tot,0);
+    const pUpd=data.updates.filter(u=>(String(u.projectId)===String(proj.id))&&u.date>=form.startDate&&u.date<=form.endDate);
+    const spends=pUpd.filter(u=>u.type==="spend");
+    const siteUpd=pUpd.filter(u=>u.type==="update");
+    const hCells=["Employee",...dates.map(d=>{const dt=new Date(d+"T00:00:00");return DAYS[dt.getDay()]+"<br/>"+fmtDate(d);}),"Total"].map(h=>`<th style="background:#1A1A1A;color:#fff;padding:8px 6px;font-size:11px;border:1px solid #333;text-align:center;">${h}</th>`).join("");
+    const dRows=rows.map((r,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 10px;font-weight:600;font-size:12px;border:1px solid #E8E4DF;">${r.emp.name}</td>${r.dh.map(h=>`<td style="text-align:center;padding:8px 4px;font-size:12px;border:1px solid #E8E4DF;">${h}</td>`).join("")}<td style="text-align:center;padding:8px;font-weight:800;font-size:13px;border:1px solid #E8E4DF;color:#D97941;">${r.tot}h</td></tr>`).join("");
+    const salSec=form.includeSpend??true?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Salary Summary</h3><table style="width:100%;border-collapse:collapse;"><tr><th style="background:#1A1A1A;color:#fff;padding:8px 12px;font-size:11px;text-align:left;border:1px solid #333;">Employee</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Rate</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Hours</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Pay</th></tr>${rows.map((r,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 12px;font-size:12px;font-weight:600;border:1px solid #E8E4DF;">${r.emp.name}</td><td style="text-align:center;padding:8px;font-size:12px;border:1px solid #E8E4DF;">$${r.emp.rate}</td><td style="text-align:center;padding:8px;font-size:12px;border:1px solid #E8E4DF;">${r.tot}h</td><td style="text-align:center;padding:8px;font-size:12px;font-weight:700;border:1px solid #E8E4DF;color:#D97941;">$${fmt(r.emp.rate*r.tot)}</td></tr>`).join("")}<tr style="background:#1A1A1A;"><td colspan="2" style="padding:10px 12px;color:#fff;font-weight:800;font-size:13px;border:1px solid #333;">TOTAL</td><td style="text-align:center;padding:10px;color:#fff;font-weight:800;border:1px solid #333;">${grandH}h</td><td style="text-align:center;padding:10px;color:#D97941;font-weight:800;font-size:13px;border:1px solid #333;">$${fmt(rows.reduce((s,r)=>s+r.emp.rate*r.tot,0))}</td></tr></table></div>`:"";
+    const rcptSec=spends.length>0?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Receipts & Expenses</h3><table style="width:100%;border-collapse:collapse;"><tr><th style="background:#1A1A1A;color:#fff;padding:8px 12px;font-size:11px;text-align:left;border:1px solid #333;">Date</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;text-align:left;border:1px solid #333;">Description</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;text-align:right;border:1px solid #333;">Amount</th></tr>${spends.map((u,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 12px;font-size:12px;border:1px solid #E8E4DF;">${fmtDate(u.date)}</td><td style="padding:8px;font-size:12px;border:1px solid #E8E4DF;">${u.note}</td><td style="padding:8px;font-size:12px;font-weight:700;text-align:right;border:1px solid #E8E4DF;color:#4A9E6B;">$${fmt(u.amount)}</td></tr>`).join("")}<tr style="background:#F0EDE9;"><td colspan="2" style="padding:10px 12px;font-weight:800;border:1px solid #E8E4DF;">TOTAL EXPENSES</td><td style="text-align:right;padding:10px;font-weight:800;border:1px solid #E8E4DF;color:#4A9E6B;">$${fmt(spends.reduce((s,u)=>s+(u.amount||0),0))}</td></tr></table></div>`:"";
+    const tlSec=siteUpd.length>0?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Project Timeline</h3>${siteUpd.map(u=>`<div style="border:1px solid #E8E4DF;border-radius:10px;padding:14px;margin-bottom:10px;"><p style="font-size:11px;color:#888;margin:0 0 6px;">${fmtDate(u.date)} · ${u.author}</p><p style="margin:0;font-size:13px;line-height:1.5;">${u.note}</p></div>`).join("")}</div>`:"";
+    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${proj.name} Report</title><style>body{font-family:sans-serif;margin:0;padding:32px;color:#1A1A1A;}*{box-sizing:border-box;}</style></head><body><div style="border-bottom:3px solid #1A1A1A;padding-bottom:16px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-end;"><div><p style="margin:0;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#888;">Project Report</p><h1 style="margin:4px 0 0;font-size:26px;font-weight:800;">${proj.name}</h1><p style="margin:4px 0 0;font-size:13px;color:#888;">📍 ${proj.location}</p></div><div style="text-align:right;"><p style="margin:0;font-size:12px;color:#888;">Period</p><p style="margin:4px 0 0;font-weight:700;">${fmtDate(form.startDate)} – ${fmtDate(form.endDate)}</p><p style="margin:2px 0 0;font-size:11px;color:#aaa;">Generated ${new Date().toLocaleDateString()}</p></div></div><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Timesheet</h3><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:400px;"><tr>${hCells}</tr>${dRows}<tr style="background:#F0EDE9;"><td style="padding:10px;font-weight:800;border:1px solid #E8E4DF;">TOTAL</td>${dates.map(d=>{const t=pLogs.filter(l=>l.date===d).reduce((s,l)=>s+l.hours,0);return`<td style="text-align:center;padding:10px 4px;font-weight:700;border:1px solid #E8E4DF;">${t}h</td>`;}).join("")}<td style="text-align:center;padding:10px;font-weight:800;border:1px solid #E8E4DF;color:#D97941;">${grandH}h</td></tr></table></div>${salSec}${rcptSec}${tlSec}<div style="margin-top:40px;padding-top:16px;border-top:1px solid #E8E4DF;font-size:11px;color:#aaa;display:flex;justify-content:space-between;"><span>Work Tracker</span><span>${proj.name} · ${fmtDate(form.startDate)} – ${fmtDate(form.endDate)}</span></div></body></html>`;
+    const blob=new Blob([html],{type:"text/html"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=proj.name.replace(/\s+/g,"-")+"-report.html";a.click();URL.revokeObjectURL(url);
+    closeModal();showToast("Report downloaded ✓");
+  }
+
+  // ── SCREENS
+
+  // Login
+  if(screen==="login") return e("div",{style:{background:"#1A1A1A",minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32}},
+    e("div",{style:{background:"#D97941",borderRadius:20,width:64,height:64,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,marginBottom:24}},"🏗️"),
+    e("p",{style:{color:"#666",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:8}},"Work Tracker"),
+    e("h1",{style:{color:"#fff",fontFamily:"'Syne',sans-serif",fontSize:28,fontWeight:800,marginBottom:8,textAlign:"center"}},"Hours & Spend"),
+    e("p",{style:{color:"#555",fontSize:13,marginBottom:40,textAlign:"center"}},"Track your crew's time, costs, and project updates."),
+    e("div",{id:"g_id_onload","data-client_id":CLIENT_ID,"data-callback":"handleCredentialResponse","data-auto_prompt":"false"}),
+    e("div",{className:"g_id_signin","data-type":"standard","data-size":"large","data-theme":"outline","data-text":"sign_in_with","data-shape":"pill","data-width":"300"}),
+    e("p",{style:{color:"#444",fontSize:11,marginTop:24,textAlign:"center"}},"Only authorized team members can sign in.")
+  );
+
+  // Loading
+  if(screen==="loading") return e("div",{style:{background:"#1A1A1A",minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}},
+    e("div",{style:{width:32,height:32,border:"3px solid #333",borderTop:"3px solid #D97941",borderRadius:"50%"},className:"spin"}),
+    e("p",{style:{color:"#666",fontSize:13}},"Loading your data…")
+  );
+
+  // Main App
+  return e("div",{style:{background:"#F5F2EE",minHeight:"100vh",maxWidth:430,margin:"0 auto",position:"relative",paddingBottom:90}},
+    e(Toast,{msg:toast}),
+
+    // HEADER
+    e("div",{style:{background:"#1A1A1A",padding:"20px 20px 18px",borderRadius:"0 0 24px 24px"}},
+      e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+        e("div",null,
+          e("p",{style:{color:"#555",fontSize:11,letterSpacing:2,textTransform:"uppercase",margin:0}},"Work Tracker"),
+          e("h1",{style:{color:"#fff",fontFamily:"'Syne',sans-serif",fontSize:24,margin:"2px 0 0",fontWeight:800}},"Hours & Spend")
+        ),
+        e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+          e("div",{style:{textAlign:"right"}},
+            e("p",{style:{margin:0,color:"#fff",fontSize:12,fontWeight:600}},currentUser?.name?.split(" ")[0]),
+            e(Badge,{label:currentUser?.role||"",color:"#D97941"})
+          ),
+          e(Avatar,{name:currentUser?.name||"?"})
+        )
+      ),
+      e("div",{style:{display:"flex",gap:8}},
+        [{label:"Active",value:activePr.length},{label:"Employees",value:data.employees.length},{label:"Hours (7d)",value:data.logs.filter(l=>l.date>=new Date(Date.now()-7*864e5).toISOString().split("T")[0]).reduce((s,l)=>s+l.hours,0)}].map(s=>
+          e("div",{key:s.label,style:{flex:1,background:"#2A2A2A",borderRadius:12,padding:"10px 12px"}},
+            e("p",{style:{color:"#D97941",fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,margin:0}},s.value),
+            e("p",{style:{color:"#666",fontSize:10,margin:"2px 0 0"}},s.label)
+          )
+        )
+      )
+    ),
+
+    // TABS
+    e("div",{style:{display:"flex",gap:6,padding:"14px 16px 6px",overflowX:"auto"}},
+      ["Projects","Employees","Log Hours","Updates","Summary"].map(t=>
+        e("button",{key:t,onClick:()=>setTab(t),style:{flexShrink:0,padding:"7px 14px",borderRadius:20,border:"none",background:tab===t?"#1A1A1A":"#E8E4DF",color:tab===t?"#fff":"#666",fontWeight:600,fontSize:12}},t)
+      )
+    ),
+
+    // CONTENT
+    e("div",{style:{padding:"10px 16px"}},
+
+      // PROJECTS
+      tab==="Projects"&&e(React.Fragment,null,
+        e("div",{style:{display:"flex",background:"#E8E4DF",borderRadius:14,padding:4,marginBottom:14}},
+          e(Pill,{label:`Active (${activePr.length})`,active:pFilter==="active",onClick:()=>setPFilter("active")}),
+          e(Pill,{label:`Previous (${data.projects.filter(p=>p.closed).length})`,active:pFilter==="closed",onClick:()=>setPFilter("closed")})
+        ),
+        filteredPr.length===0&&e("div",{style:{textAlign:"center",padding:"48px 0",color:"#BBB"}},e("p",{style:{fontSize:36,margin:"0 0 8px"}},"📂"),e("p",{style:{fontSize:13}},pFilter==="active"?"No active projects yet":"No previous projects")),
+        filteredPr.map(p=>{
+          const pLogs=data.logs.filter(l=>String(l.projectId)===String(p.id));
+          const totalH=pLogs.reduce((s,l)=>s+l.hours,0);
+          const totalS=pLogs.reduce((s,l)=>{const emp=data.employees.find(x=>String(x.id)===String(l.employeeId));return s+(emp?emp.rate*l.hours:0);},0);
+          const assigned=[...new Set(pLogs.map(l=>l.employeeId))];
+          const pUpd=data.updates.filter(u=>String(u.projectId)===String(p.id));
+          const isExp=expanded[p.id];
+          return e("div",{key:p.id,style:{background:p.closed?"#F0EDE9":"#fff",borderRadius:18,padding:18,marginBottom:12,borderLeft:`5px solid ${p.closed?"#CCC":p.color}`,boxShadow:"0 2px 12px rgba(0,0,0,0.06)",opacity:p.closed?0.85:1}},
+            e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+              e("div",{style:{flex:1}},
+                e("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+                  e("h3",{style:{margin:0,fontSize:16,fontWeight:700,color:p.closed?"#888":"#1A1A1A"}},p.name),
+                  p.closed&&e(Badge,{label:"CLOSED",color:"#999",bg:"#E8E4DF"})
+                ),
+                e("p",{style:{margin:"3px 0 0",fontSize:12,color:"#888"}},"📍 "+p.location)
+              ),
+              e("span",{style:{background:(p.closed?"#CCC":p.color)+"22",color:p.closed?"#999":p.color,fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:10,flexShrink:0}},totalH+"h")
+            ),
+            e("div",{style:{display:"flex",gap:8,marginTop:12}},
+              [{label:"Salary",val:"$"+fmt(totalS)},{label:"Workers",val:assigned.length},{label:"Updates",val:pUpd.length}].map(s=>
+                e("div",{key:s.label,style:{flex:1,background:"#F5F2EE",borderRadius:12,padding:"10px 12px"}},
+                  e("p",{style:{margin:0,fontSize:10,color:"#888"}},s.label),
+                  e("p",{style:{margin:"2px 0 0",fontWeight:800,fontSize:15}},s.val)
+                )
+              )
+            ),
+            e("div",{style:{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}},
+              assigned.map(eid=>{const emp=data.employees.find(x=>String(x.id)===String(eid));return emp?e("span",{key:eid,style:{background:p.closed?"#E8E4DF":"#1A1A1A",color:p.closed?"#999":"#fff",fontSize:10,padding:"3px 10px",borderRadius:10}},emp.name):null;})
+            ),
+            e("div",{style:{marginTop:12,borderTop:"1px solid #F0EDE9",paddingTop:12}},
+              !p.closed
+                ? confirmId===p.id
+                  ? e("div",{style:{display:"flex",gap:8,alignItems:"center"}},
+                      e("p",{style:{margin:0,fontSize:12,color:"#888",flex:1}},"Close this project?"),
+                      e("button",{onClick:()=>setConfirmId(null),style:{padding:"6px 12px",borderRadius:10,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontSize:12,fontWeight:600}},"Cancel"),
+                      e("button",{onClick:()=>closeProject(p.id),style:{padding:"6px 12px",borderRadius:10,border:"none",background:"#1A1A1A",color:"#fff",fontSize:12,fontWeight:700}},saving?"…":"Yes, Close")
+                    )
+                  : e("button",{onClick:()=>setConfirmId(p.id),style:{width:"100%",padding:"9px",borderRadius:12,border:"1.5px solid #E8E4DF",background:"#fff",color:"#888",fontWeight:600,fontSize:13}},"✕ Close Project")
+                : e("button",{onClick:()=>reopenProject(p.id),style:{width:"100%",padding:"9px",borderRadius:12,border:"1.5px solid #D97941",background:"#fff",color:"#D97941",fontWeight:600,fontSize:13}},saving?"…":"↩ Reopen Project")
+            ),
+            e("button",{onClick:()=>setExpanded(ex=>({...ex,[p.id]:!ex[p.id]})),style:{width:"100%",marginTop:10,padding:"9px",borderRadius:12,border:"none",background:isExp?"#1A1A1A":"#F0EDE9",color:isExp?"#D97941":"#888",fontWeight:600,fontSize:13}},isExp?"▲ Hide Summary":"▼ View Project Summary"),
+            isExp&&e(ProjectSummary,{project:p,employees:data.employees,logs:data.logs,updates:data.updates})
+          );
+        }),
+        pFilter==="active"&&e(Btn,{onClick:()=>setModal("addProject"),style:{marginTop:4}},"+ Add Project")
+      ),
+
+      // EMPLOYEES
+      tab==="Employees"&&e(React.Fragment,null,
+        data.employees.map(emp=>{
+          const totalH=data.logs.filter(l=>String(l.employeeId)===String(emp.id)).reduce((s,l)=>s+l.hours,0);
+          const pIds=[...new Set(data.logs.filter(l=>String(l.employeeId)===String(emp.id)).map(l=>l.projectId))];
+          return e("div",{key:emp.id,style:{background:"#fff",borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 12px rgba(0,0,0,0.06)",display:"flex",alignItems:"center",gap:14}},
+            e(Avatar,{name:emp.name,size:44}),
+            e("div",{style:{flex:1}},
+              e("h3",{style:{margin:0,fontSize:15,fontWeight:700}},emp.name),
+              e("p",{style:{margin:"2px 0 4px",fontSize:12,color:"#888"}},"$"+emp.rate+"/hr"),
+              e("div",{style:{display:"flex",gap:4,flexWrap:"wrap"}},
+                pIds.map(pid=>{const proj=data.projects.find(p=>String(p.id)===String(pid));return proj?e("span",{key:pid,style:{background:proj.color+"22",color:proj.color,fontSize:10,padding:"2px 8px",borderRadius:8,fontWeight:600}},proj.name):null;})
+              )
+            ),
+            e("div",{style:{textAlign:"right"}},
+              e("p",{style:{margin:0,fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:20}},totalH+"h"),
+              e("p",{style:{margin:0,fontSize:11,color:"#888"}},"total")
+            )
+          );
+        }),
+        e(Btn,{onClick:()=>setModal("addEmployee")},"+ Add Employee")
+      ),
+
+      // LOG HOURS
+      tab==="Log Hours"&&e(React.Fragment,null,
+        data.logs.slice().sort((a,b)=>b.date.localeCompare(a.date)).map(log=>{
+          const emp=data.employees.find(x=>String(x.id)===String(log.employeeId));
+          const proj=data.projects.find(x=>String(x.id)===String(log.projectId));
+          return e("div",{key:log.id,style:{background:"#fff",borderRadius:16,padding:"14px 16px",marginBottom:10,boxShadow:"0 2px 10px rgba(0,0,0,0.05)",borderLeft:`4px solid ${proj?.color||"#ccc"}`}},
+            e("div",{style:{display:"flex",justifyContent:"space-between"}},
+              e("div",null,
+                e("p",{style:{margin:0,fontWeight:700,fontSize:14}},emp?.name||"?"),
+                e("p",{style:{margin:"2px 0 0",fontSize:12,color:"#888"}},(proj?.name||"?")+" · "+fmtDate(log.date)),
+                log.location&&e("p",{style:{margin:"2px 0 0",fontSize:11,color:"#aaa"}},"📍 "+log.location)
+              ),
+              e("div",{style:{textAlign:"right"}},
+                e("p",{style:{margin:0,fontWeight:800,fontSize:18,fontFamily:"'Syne',sans-serif"}},log.hours+"h"),
+                e("p",{style:{margin:"2px 0 0",fontSize:12,color:"#D97941",fontWeight:600}},"$"+fmt(emp?emp.rate*log.hours:0))
+              )
+            )
+          );
+        }),
+        e(Btn,{variant:"orange",onClick:()=>setModal("logHours"),style:{marginTop:4}},"+ Log Hours")
+      ),
+
+      // UPDATES
+      tab==="Updates"&&e(React.Fragment,null,
+        e("div",{style:{marginBottom:14}},
+          e(Sel,{value:selProjId||"",onChange:ev=>setSelProjId(ev.target.value?parseInt(ev.target.value):null)},
+            e("option",{value:""},"All Projects"),
+            data.projects.map(p=>e("option",{key:p.id,value:p.id},p.name+(p.closed?" (closed)":"")))
+          )
+        ),
+        data.updates.filter(u=>u.type==="spend"&&(!selProjId||String(u.projectId)===String(selProjId))).length>0&&e(React.Fragment,null,
+          e("p",{style:{margin:"0 0 8px",fontSize:10,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:"#AAA"}},"🧾 Expenses"),
+          data.updates.filter(u=>u.type==="spend"&&(!selProjId||String(u.projectId)===String(selProjId))).sort((a,b)=>b.date.localeCompare(a.date)).map(u=>{
+            const proj=data.projects.find(p=>String(p.id)===String(u.projectId));
+            return e("div",{key:u.id,style:{background:"#fff",borderRadius:16,padding:16,marginBottom:10,boxShadow:"0 2px 10px rgba(0,0,0,0.05)",borderLeft:"4px solid #4A9E6B"}},
+              e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+                e("div",{style:{flex:1}},
+                  proj&&e(Badge,{label:proj.name,color:proj.color}),
+                  e("p",{style:{margin:"4px 0 0",fontWeight:700,fontSize:14}},u.note),
+                  e("p",{style:{margin:"2px 0 0",fontSize:11,color:"#aaa"}},fmtDate(u.date)+" · "+u.author)
+                ),
+                e("p",{style:{margin:0,fontWeight:800,fontSize:18,fontFamily:"'Syne',sans-serif",color:"#4A9E6B",marginLeft:8}},"$"+fmt(u.amount))
+              )
+            );
+          })
+        ),
+        data.updates.filter(u=>u.type==="update"&&(!selProjId||String(u.projectId)===String(selProjId))).length>0&&e(React.Fragment,null,
+          e("p",{style:{margin:"16px 0 8px",fontSize:10,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:"#AAA"}},"📋 Site Updates"),
+          data.updates.filter(u=>u.type==="update"&&(!selProjId||String(u.projectId)===String(selProjId))).sort((a,b)=>b.date.localeCompare(a.date)).map(u=>{
+            const proj=data.projects.find(p=>String(p.id)===String(u.projectId));
+            return e("div",{key:u.id,style:{background:"#fff",borderRadius:16,padding:16,marginBottom:10,boxShadow:"0 2px 10px rgba(0,0,0,0.05)",borderLeft:`4px solid ${proj?.color||"#ccc"}`}},
+              e("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:6}},
+                proj&&e(Badge,{label:proj.name,color:proj.color}),
+                e("p",{style:{margin:0,fontSize:11,color:"#aaa"}},fmtDate(u.date)+" · "+u.author)
+              ),
+              u.note&&e("p",{style:{margin:0,fontSize:13,lineHeight:1.5}},u.note)
+            );
+          })
+        ),
+        data.updates.filter(u=>!selProjId||String(u.projectId)===String(selProjId)).length===0&&e("div",{style:{textAlign:"center",padding:"48px 0",color:"#BBB"}},e("p",{style:{fontSize:36,margin:"0 0 8px"}},"📋"),e("p",{style:{fontSize:13}},"No entries yet.")),
+        e(Btn,{variant:"orange",onClick:()=>{setForm({utype:"update",pId:selProjId||(activePr[0]?.id),date:today()});setModal("addEntry");},style:{marginTop:8}},"+ Add Entry")
+      ),
+
+      // SUMMARY
+      tab==="Summary"&&e(React.Fragment,null,
+        data.projects.map(p=>{
+          const pLogs=data.logs.filter(l=>String(l.projectId)===String(p.id));
+          const totalH=pLogs.reduce((s,l)=>s+l.hours,0);
+          const byEmp=data.employees.map(emp=>{const h=pLogs.filter(l=>String(l.employeeId)===String(emp.id)).reduce((s,l)=>s+l.hours,0);return{...emp,hours:h,spend:emp.rate*h};}).filter(x=>x.hours>0);
+          const totalS=byEmp.reduce((s,x)=>s+x.spend,0);
+          return e("div",{key:p.id,style:{background:"#fff",borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 14px rgba(0,0,0,0.07)",opacity:p.closed?0.75:1}},
+            e("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:14}},
+              e("div",{style:{width:10,height:10,borderRadius:"50%",background:p.closed?"#CCC":p.color,flexShrink:0}}),
+              e("h3",{style:{margin:0,fontSize:16,fontWeight:700,color:p.closed?"#888":"#1A1A1A"}},p.name),
+              p.closed&&e(Badge,{label:"CLOSED",color:"#999",bg:"#E8E4DF"})
+            ),
+            e("div",{style:{display:"flex",gap:8,marginBottom:14}},
+              e("div",{style:{flex:1,background:"#F5F2EE",borderRadius:12,padding:"12px"}},e("p",{style:{margin:0,fontSize:10,color:"#888"}},"Total Hours"),e("p",{style:{margin:"4px 0 0",fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:22}},totalH+"h")),
+              e("div",{style:{flex:1,background:"#1A1A1A",borderRadius:12,padding:"12px"}},e("p",{style:{margin:0,fontSize:10,color:"#666"}},"Total Salary"),e("p",{style:{margin:"4px 0 0",fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:22,color:"#D97941"}},"$"+fmt(totalS)))
+            ),
+            byEmp.map(emp=>e("div",{key:emp.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #F5F2EE"}},
+              e("div",{style:{display:"flex",alignItems:"center",gap:10}},e(Avatar,{name:emp.name,size:28}),e("div",null,e("p",{style:{margin:0,fontSize:13,fontWeight:600}},emp.name),e("p",{style:{margin:0,fontSize:11,color:"#888"}},"$"+emp.rate+"/hr"))),
+              e("div",{style:{textAlign:"right"}},e("p",{style:{margin:0,fontWeight:700,fontSize:14}},emp.hours+"h"),e("p",{style:{margin:0,fontSize:12,color:"#D97941",fontWeight:600}},"$"+fmt(emp.spend)))
+            )),
+            e("div",{style:{marginTop:14}},e(Btn,{variant:"ghost",onClick:()=>{setSelProjId(p.id);setModal("exportPDF");}},"📄 Export Report"))
+          );
+        })
+      )
+    ),
+
+    // BOTTOM NAV
+    e("div",{style:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#fff",borderTop:"1px solid #E8E4DF",display:"flex",padding:"8px 0 18px"}},
+      [["Projects","🏗️"],["Employees","👷"],["Log Hours","⏱️"],["Updates","📋"],["Summary","📊"]].map(([t,ic])=>
+        e("button",{key:t,onClick:()=>setTab(t),style:{flex:1,background:"none",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2}},
+          e("span",{style:{fontSize:18}},ic),
+          e("span",{style:{fontSize:9,fontWeight:600,color:tab===t?"#D97941":"#AAA"}},t)
+        )
+      )
+    ),
+
+    // USERS BUTTON
+    e("button",{onClick:()=>setModal("users"),style:{position:"fixed",bottom:90,right:20,background:"#1A1A1A",border:"none",borderRadius:"50%",width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",zIndex:50}},"👥"),
+
+    // MODALS
+    e(Modal,{show:modal==="addProject",onClose:closeModal,title:"New Project"},
+      e(Field,{label:"Project Name"},e(Inp,{placeholder:"e.g. Riverside Build",value:form.name||"",onChange:ev=>sf("name",ev.target.value)})),
+      e(Field,{label:"Location"},e(Inp,{placeholder:"e.g. Riverside, CA",value:form.location||"",onChange:ev=>sf("location",ev.target.value)})),
+      e(Btn,{onClick:addProject,disabled:saving||!form.name?.trim()},saving?"Saving…":"Save Project")
+    ),
+
+    e(Modal,{show:modal==="addEmployee",onClose:closeModal,title:"New Employee"},
+      e(Field,{label:"Full Name"},e(Inp,{placeholder:"Name",value:form.name||"",onChange:ev=>sf("name",ev.target.value)})),
+      e(Field,{label:"Hourly Rate ($)"},e(Inp,{type:"number",placeholder:"28",value:form.rate||"",onChange:ev=>sf("rate",ev.target.value)})),
+      e(Btn,{onClick:addEmployee,disabled:saving||!form.name?.trim()},saving?"Saving…":"Save Employee")
+    ),
+
+    e(Modal,{show:modal==="logHours",onClose:closeModal,title:"Log Hours"},
+      e(Field,{label:"Employee"},e(Sel,{value:form.eId||"",onChange:ev=>sf("eId",ev.target.value)},e("option",{value:""},"Select employee…"),data.employees.map(x=>e("option",{key:x.id,value:x.id},x.name)))),
+      e(Field,{label:"Project"},e(Sel,{value:form.pId||"",onChange:ev=>sf("pId",ev.target.value)},e("option",{value:""},"Select project…"),activePr.map(x=>e("option",{key:x.id,value:x.id},x.name)))),
+      e("div",{style:{display:"flex",gap:10}},
+        e(Field,{label:"Date"},e(Inp,{type:"date",value:form.date||today(),onChange:ev=>sf("date",ev.target.value)})),
+        e(Field,{label:"Hours"},e(Inp,{type:"number",placeholder:"8",value:form.hours||"",onChange:ev=>sf("hours",ev.target.value)}))
+      ),
+      e(Field,{label:"Location"},e(Inp,{placeholder:"e.g. Riverside, CA",value:form.location||"",onChange:ev=>sf("location",ev.target.value)})),
+      e(Btn,{onClick:logHours,disabled:saving||!form.eId||!form.pId||!form.date},saving?"Saving…":"Save Hours")
+    ),
+
+    e(Modal,{show:modal==="addEntry",onClose:closeModal,title:"Add Entry"},
+      e("div",{style:{display:"flex",background:"#F0EDE9",borderRadius:14,padding:4,marginBottom:16}},
+        [["update","📋 Site Update"],["spend","🧾 Log Spend"]].map(([val,lbl])=>
+          e("button",{key:val,onClick:()=>sf("utype",val),style:{flex:1,padding:"9px",border:"none",borderRadius:11,background:form.utype===val?"#1A1A1A":"transparent",color:form.utype===val?"#fff":"#888",fontWeight:700,fontSize:13}},lbl)
+        )
+      ),
+      e(Field,{label:"Project"},e(Sel,{value:form.pId||"",onChange:ev=>sf("pId",ev.target.value)},e("option",{value:""},"Select project…"),data.projects.map(x=>e("option",{key:x.id,value:x.id},x.name+(x.closed?" (closed)":""))))),
+      e(Field,{label:"Date"},e(Inp,{type:"date",value:form.date||today(),onChange:ev=>sf("date",ev.target.value)})),
+      form.utype==="spend"&&e(Field,{label:"Amount ($)"},e(Inp,{type:"number",placeholder:"0.00",value:form.amount||"",onChange:ev=>sf("amount",ev.target.value)})),
+      e(Field,{label:form.utype==="spend"?"Description":"Note / Update"},
+        e("textarea",{placeholder:form.utype==="spend"?"e.g. Lumber delivery…":"Site update, observations…",value:form.note||"",onChange:ev=>sf("note",ev.target.value),style:{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #E8E4DF",fontSize:14,boxSizing:"border-box",outline:"none",minHeight:80,resize:"vertical"}})
+      ),
+      e(Btn,{onClick:addEntry,disabled:saving||(!form.note?.trim()&&!form.photo)},saving?"Saving…":"Save Entry")
+    ),
+
+    e(Modal,{show:modal==="exportPDF",onClose:closeModal,title:"Export Report"},
+      e(Field,{label:"Project"},e(Sel,{value:selProjId||"",onChange:ev=>setSelProjId(parseInt(ev.target.value))},e("option",{value:""},"Select…"),data.projects.map(p=>e("option",{key:p.id,value:p.id},p.name)))),
+      e("div",{style:{display:"flex",gap:10}},
+        e(Field,{label:"From"},e(Inp,{type:"date",value:form.startDate||"",onChange:ev=>sf("startDate",ev.target.value)})),
+        e(Field,{label:"To"},e(Inp,{type:"date",value:form.endDate||"",onChange:ev=>sf("endDate",ev.target.value)}))
+      ),
+      e("div",{style:{display:"flex",alignItems:"center",gap:10,background:"#F5F2EE",borderRadius:12,padding:"12px 14px",marginBottom:16}},
+        e("input",{type:"checkbox",id:"inc",checked:form.includeSpend??true,onChange:ev=>sf("includeSpend",ev.target.checked),style:{width:18,height:18}}),
+        e("label",{htmlFor:"inc",style:{fontSize:14,fontWeight:600}},"Include salary & expense summary")
+      ),
+      e(Btn,{variant:"dark",disabled:!form.startDate||!form.endDate||!selProjId,onClick:exportPDF},"📄 Download Report"),
+      e("p",{style:{textAlign:"center",fontSize:11,color:"#aaa",marginTop:10}},"Open in browser → Print → Save as PDF")
+    ),
+
+    e(Modal,{show:modal==="users",onClose:closeModal,title:"Team Access"},
+      data.users.filter(u=>u.role!=="removed").map(u=>e("div",{key:u.id,style:{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:"1px solid #F5F2EE"}},
+        e(Avatar,{name:u.name,size:36}),
+        e("div",{style:{flex:1}},e("p",{style:{margin:0,fontWeight:700,fontSize:14}},u.name),e("p",{style:{margin:"2px 0 0",fontSize:11,color:"#888"}},u.email)),
+        e(Badge,{label:u.role,color:u.role==="Owner"?"#D97941":"#4A8FA4"}),
+        u.role!=="Owner"&&e("button",{onClick:()=>removeUser(u.id),style:{background:"none",border:"none",color:"#CCC",fontSize:16,padding:"0 4px"}},"✕")
+      )),
+      e("div",{style:{marginTop:16}},e(Btn,{onClick:()=>setModal("addUser")},"+ Add Team Member"))
+    ),
+
+    e(Modal,{show:modal==="addUser",onClose:()=>setModal("users"),title:"Add Team Member"},
+      e(Field,{label:"Full Name"},e(Inp,{placeholder:"Name",value:form.name||"",onChange:ev=>sf("name",ev.target.value)})),
+      e(Field,{label:"Email (Google account)"},e(Inp,{type:"email",placeholder:"email@gmail.com",value:form.email||"",onChange:ev=>sf("email",ev.target.value)})),
+      e(Field,{label:"Role"},e(Sel,{value:form.role||"Manager",onChange:ev=>sf("role",ev.target.value)},e("option",{value:"Manager"},"Manager"),e("option",{value:"Owner"},"Owner"))),
+      e(Btn,{onClick:addUser,disabled:saving||!form.name?.trim()||!form.email?.trim()},saving?"Saving…":"Add Member")
+    )
+  );
+}
+
+// Load React then mount
+const s1=document.createElement("script");
+s1.src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js";
+s1.onload=()=>{
+  const s2=document.createElement("script");
+  s2.src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js";
+  s2.onload=()=>{
+    ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  };
+  document.head.appendChild(s2);
+};
+document.head.appendChild(s1);
+</script>
+</body>
+</html>
