@@ -1,27 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
-<title>Work Tracker</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
-<!-- Google Sign-In -->
-<script src="https://accounts.google.com/gsi/client" async defer></script>
-<style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'DM Sans',sans-serif;background:#F5F2EE;min-height:100vh;}
-#root{max-width:430px;margin:0 auto;position:relative;min-height:100vh;}
-button{font-family:'DM Sans',sans-serif;cursor:pointer;}
-input,select,textarea{font-family:'DM Sans',sans-serif;}
-::-webkit-scrollbar{width:0;}
-.spin{animation:spin 1s linear infinite;}
-@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
-</style>
-</head>
-<body>
-<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888;font-size:14px;">Loading…</div></div>
 
-<script>
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const SHEET_ID   = "1ylCpXKA8aU7QdeKk8gsXu0A41p_j9ZF2-tB7VYSrr-o";
 const API_KEY    = "AIzaSyBXSOLF3PnLmJJ3fX45D6xoay3uadtr7v8";
@@ -624,7 +601,7 @@ function App(){
             isExp&&e(ProjectSummary,{project:p,employees:data.employees,logs:data.logs,updates:data.updates})
           );
         }),
-        pFilter==="active"&&e(Btn,{onClick:()=>{setForm({});setModal("addProject");},style:{marginTop:4}},"+ Add Project")
+        pFilter===\"active\"&&e(Btn,{onClick:()=>{setForm({});setModal(\"addProject\");},style:{marginTop:4}},"+ Add Project")
       ),
 
       // EMPLOYEES
@@ -855,6 +832,3 @@ s1.onload=()=>{
   document.head.appendChild(s2);
 };
 document.head.appendChild(s1);
-</script>
-</body>
-</html>
