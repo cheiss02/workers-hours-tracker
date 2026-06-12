@@ -73,7 +73,7 @@ async function loadAll(){
     sheetsGet("Updates!A:H"),
   ]);
   return {
-    projects: parseRows(pRows,["id","name","color","location","closed"]).map(p=>({...p,closed:p.closed==="true"})),
+    projects: parseRows(pRows,["id","name","color","location","closed"]).map(p=>({...p,closed:String(p.closed).toLowerCase()==="true"})),
     employees: parseRows(eRows,["id","name","rate"]).map(e=>({...e,rate:parseFloat(e.rate)||0,id:parseInt(e.id)})),
     logs: parseRows(lRows,["id","employeeId","projectId","date","hours","location"]).map(l=>({...l,employeeId:parseInt(l.employeeId),projectId:parseInt(l.projectId),hours:parseFloat(l.hours)||0,id:parseInt(l.id)})),
     users: parseRows(uRows,["id","name","email","role"]),
@@ -207,32 +207,37 @@ function App(){
       const email=payload.email;
       const name=payload.name;
       setScreen("loading");
-      // Get access token for Sheets write
+
       tokenClient=google.accounts.oauth2.initTokenClient({
         client_id:CLIENT_ID,
         scope:SCOPES,
-        callback:(tokenResponse)=>{
+        callback: async(tokenResponse)=>{
+          if(tokenResponse.error){
+            console.error("Token error", tokenResponse);
+            alert("Unable to authorize Sheets access. Please try again.");
+            setScreen("login");
+            return;
+          }
           accessToken=tokenResponse.access_token;
+          try{
+            const loaded=await loadAll();
+            const found=loaded.users.find(u=>u.email.toLowerCase()===email.toLowerCase());
+            if(!found){
+              alert("Access denied. Ask the project owner to add your email.");
+              setScreen("login");
+              return;
+            }
+            setCurrentUser({...found,name:found.name||name});
+            setData(loaded);
+            setScreen("app");
+          }catch(err){
+            console.error(err);
+            alert("Error loading data. Check your Sheet is set up and API access is configured.");
+            setScreen("login");
+          }
         }
       });
       tokenClient.requestAccessToken({prompt:""});
-      // Load data and check user
-      try{
-        const loaded=await loadAll();
-        const found=loaded.users.find(u=>u.email.toLowerCase()===email.toLowerCase());
-        if(!found){
-          alert("Access denied. Ask the project owner to add your email.");
-          setScreen("login");
-          return;
-        }
-        setCurrentUser({...found,name:found.name||name});
-        setData(loaded);
-        setScreen("app");
-      }catch(err){
-        console.error(err);
-        alert("Error loading data. Check your Sheet is set up and API key is valid.");
-        setScreen("login");
-      }
     };
   },[]);
 
@@ -335,7 +340,7 @@ function App(){
     const siteUpd=pUpd.filter(u=>u.type==="update");
     const hCells=["Employee",...dates.map(d=>{const dt=new Date(d+"T00:00:00");return DAYS[dt.getDay()]+"<br/>"+fmtDate(d);}),"Total"].map(h=>`<th style="background:#1A1A1A;color:#fff;padding:8px 6px;font-size:11px;border:1px solid #333;text-align:center;">${h}</th>`).join("");
     const dRows=rows.map((r,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 10px;font-weight:600;font-size:12px;border:1px solid #E8E4DF;">${r.emp.name}</td>${r.dh.map(h=>`<td style="text-align:center;padding:8px 4px;font-size:12px;border:1px solid #E8E4DF;">${h}</td>`).join("")}<td style="text-align:center;padding:8px;font-weight:800;font-size:13px;border:1px solid #E8E4DF;color:#D97941;">${r.tot}h</td></tr>`).join("");
-    const salSec=form.includeSpend??true?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Salary Summary</h3><table style="width:100%;border-collapse:collapse;"><tr><th style="background:#1A1A1A;color:#fff;padding:8px 12px;font-size:11px;text-align:left;border:1px solid #333;">Employee</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Rate</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Hours</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Pay</th></tr>${rows.map((r,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 12px;font-size:12px;font-weight:600;border:1px solid #E8E4DF;">${r.emp.name}</td><td style="text-align:center;padding:8px;font-size:12px;border:1px solid #E8E4DF;">$${r.emp.rate}</td><td style="text-align:center;padding:8px;font-size:12px;border:1px solid #E8E4DF;">${r.tot}h</td><td style="text-align:center;padding:8px;font-size:12px;font-weight:700;border:1px solid #E8E4DF;color:#D97941;">$${fmt(r.emp.rate*r.tot)}</td></tr>`).join("")}<tr style="background:#1A1A1A;"><td colspan="2" style="padding:10px 12px;color:#fff;font-weight:800;font-size:13px;border:1px solid #333;">TOTAL</td><td style="text-align:center;padding:10px;color:#fff;font-weight:800;border:1px solid #333;">${grandH}h</td><td style="text-align:center;padding:10px;color:#D97941;font-weight:800;font-size:13px;border:1px solid #333;">$${fmt(rows.reduce((s,r)=>s+r.emp.rate*r.tot,0))}</td></tr></table></div>`:"";
+    const salSec=(form.includeSpend ?? true)?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Salary Summary</h3><table style="width:100%;border-collapse:collapse;"><tr><th style="background:#1A1A1A;color:#fff;padding:8px 12px;font-size:11px;text-align:left;border:1px solid #333;">Employee</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Rate</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Hours</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;border:1px solid #333;">Pay</th></tr>${rows.map((r,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 12px;font-size:12px;font-weight:600;border:1px solid #E8E4DF;">${r.emp.name}</td><td style="text-align:center;padding:8px;font-size:12px;border:1px solid #E8E4DF;">$${r.emp.rate}</td><td style="text-align:center;padding:8px;font-size:12px;border:1px solid #E8E4DF;">${r.tot}h</td><td style="text-align:center;padding:8px;font-size:12px;font-weight:700;border:1px solid #E8E4DF;color:#D97941;">$${fmt(r.emp.rate*r.tot)}</td></tr>`).join("")}<tr style="background:#1A1A1A;"><td colspan="2" style="padding:10px 12px;color:#fff;font-weight:800;font-size:13px;border:1px solid #333;">TOTAL</td><td style="text-align:center;padding:10px;color:#fff;font-weight:800;border:1px solid #333;">${grandH}h</td><td style="text-align:center;padding:10px;color:#D97941;font-weight:800;font-size:13px;border:1px solid #333;">$${fmt(rows.reduce((s,r)=>s+r.emp.rate*r.tot,0))}</td></tr></table></div>`:"";
     const rcptSec=spends.length>0?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Receipts & Expenses</h3><table style="width:100%;border-collapse:collapse;"><tr><th style="background:#1A1A1A;color:#fff;padding:8px 12px;font-size:11px;text-align:left;border:1px solid #333;">Date</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;text-align:left;border:1px solid #333;">Description</th><th style="background:#1A1A1A;color:#fff;padding:8px;font-size:11px;text-align:right;border:1px solid #333;">Amount</th></tr>${spends.map((u,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 12px;font-size:12px;border:1px solid #E8E4DF;">${fmtDate(u.date)}</td><td style="padding:8px;font-size:12px;border:1px solid #E8E4DF;">${u.note}</td><td style="padding:8px;font-size:12px;font-weight:700;text-align:right;border:1px solid #E8E4DF;color:#4A9E6B;">$${fmt(u.amount)}</td></tr>`).join("")}<tr style="background:#F0EDE9;"><td colspan="2" style="padding:10px 12px;font-weight:800;border:1px solid #E8E4DF;">TOTAL EXPENSES</td><td style="text-align:right;padding:10px;font-weight:800;border:1px solid #E8E4DF;color:#4A9E6B;">$${fmt(spends.reduce((s,u)=>s+(u.amount||0),0))}</td></tr></table></div>`:"";
     const tlSec=siteUpd.length>0?`<div style="margin-top:28px;"><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Project Timeline</h3>${siteUpd.map(u=>`<div style="border:1px solid #E8E4DF;border-radius:10px;padding:14px;margin-bottom:10px;"><p style="font-size:11px;color:#888;margin:0 0 6px;">${fmtDate(u.date)} · ${u.author}</p><p style="margin:0;font-size:13px;line-height:1.5;">${u.note}</p></div>`).join("")}</div>`:"";
     const html=`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${proj.name} Report</title><style>body{font-family:sans-serif;margin:0;padding:32px;color:#1A1A1A;}*{box-sizing:border-box;}</style></head><body><div style="border-bottom:3px solid #1A1A1A;padding-bottom:16px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-end;"><div><p style="margin:0;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#888;">Project Report</p><h1 style="margin:4px 0 0;font-size:26px;font-weight:800;">${proj.name}</h1><p style="margin:4px 0 0;font-size:13px;color:#888;">📍 ${proj.location}</p></div><div style="text-align:right;"><p style="margin:0;font-size:12px;color:#888;">Period</p><p style="margin:4px 0 0;font-weight:700;">${fmtDate(form.startDate)} – ${fmtDate(form.endDate)}</p><p style="margin:2px 0 0;font-size:11px;color:#aaa;">Generated ${new Date().toLocaleDateString()}</p></div></div><h3 style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#888;margin:0 0 10px;">Timesheet</h3><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:400px;"><tr>${hCells}</tr>${dRows}<tr style="background:#F0EDE9;"><td style="padding:10px;font-weight:800;border:1px solid #E8E4DF;">TOTAL</td>${dates.map(d=>{const t=pLogs.filter(l=>l.date===d).reduce((s,l)=>s+l.hours,0);return`<td style="text-align:center;padding:10px 4px;font-weight:700;border:1px solid #E8E4DF;">${t}h</td>`;}).join("")}<td style="text-align:center;padding:10px;font-weight:800;border:1px solid #E8E4DF;color:#D97941;">${grandH}h</td></tr></table></div>${salSec}${rcptSec}${tlSec}<div style="margin-top:40px;padding-top:16px;border-top:1px solid #E8E4DF;font-size:11px;color:#aaa;display:flex;justify-content:space-between;"><span>Work Tracker</span><span>${proj.name} · ${fmtDate(form.startDate)} – ${fmtDate(form.endDate)}</span></div></body></html>`;
