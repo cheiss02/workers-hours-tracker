@@ -696,7 +696,7 @@ function App(){
             )
           );
         }),
-        e(Btn,{variant:"orange",onClick:()=>setModal("logHours"),style:{marginTop:4}},"+ Log Hours")
+        e(Btn,{variant:"orange",onClick:()=>{setForm({date:today(),hours:"",location:""});setModal("logHours");},style:{marginTop:4}},"+ Log Hours")
       ),
 
       // UPDATES
