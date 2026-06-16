@@ -17,7 +17,6 @@ input,select,textarea{font-family:'DM Sans',sans-serif;}
 .spin{animation:spin 1s linear infinite;}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 <div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888;font-size:14px;">Loading…</div></div>
@@ -27,7 +26,7 @@ input,select,textarea{font-family:'DM Sans',sans-serif;}
 const SHEET_ID   = "1ylCpXKA8aU7QdeKk8gsXu0A41p_j9ZF2-tB7VYSrr-o";
 const API_KEY    = "AIzaSyBXSOLF3PnLmJJ3fX45D6xoay3uadtr7v8";
 const CLIENT_ID  = "748653707462-2npcd2lv25f2b8dom4fug52lo3osvg27.apps.googleusercontent.com";
-const SCOPES     = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/gmail.send";
+const SCOPES     = "https://www.googleapis.com/auth/spreadsheets";
 const DISCOVERY  = "https://sheets.googleapis.com/$discovery/rest?version=v4";
 
 // ── SHEETS HELPERS ────────────────────────────────────────────────────────────
@@ -522,23 +521,8 @@ function App(){
     closeModal();showToast("Report downloaded ✓");
   }
 
-  function arrayBufferToBase64(buffer){
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 0x8000;
-    for(let i=0;i<bytes.length;i+=chunkSize){
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunkSize));
-    }
-    return window.btoa(binary);
-  }
-
-  function base64UrlEncode(str){
-    return window.btoa(str).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
-  }
-
-  async function sendWeeklyReportEmail(){
-    if(!form.startDate||!form.endDate||!form.email)return;
-    setSaving(true);
+  function openWeeklyReport(){
+    if(!form.startDate||!form.endDate)return;
     const start=form.startDate;
     const end=form.endDate;
     const dates=getDates(start,end);
@@ -547,7 +531,7 @@ function App(){
     const employeeIds=[...new Set(periodLogs.map(l=>String(l.employeeId)))];
     employeeIds.forEach(empId=>{
       const emp=data.employees.find(x=>String(x.id)===empId);
-      if(!emp) return;
+      if(!emp)return;
       const empLogs=periodLogs.filter(l=>String(l.employeeId)===empId);
       const projectIds=[...new Set(empLogs.map(l=>String(l.projectId)))];
       projectIds.forEach(pid=>{
@@ -562,87 +546,13 @@ function App(){
     const employeeTotals=rows.reduce((map,row)=>{const key=String(row.emp.id);map[key]=(map[key]||0)+row.total;return map;},{ });
     const summaryRows=Object.entries(employeeTotals).map(([empId,total])=>{const emp=data.employees.find(x=>String(x.id)===empId);return {emp:emp||{name:"Unknown"},total};});
     const totalHours=summaryRows.reduce((sum,row)=>sum+row.total,0);
-    const jsPDF = window.jspdf?.jsPDF || window.jspdf?.default || window.jspPDF;
-    if(!jsPDF){
-      showToast("PDF library not loaded.");
-      setSaving(false);
-      return;
-    }
-    const doc = new jsPDF({unit:"pt",format:"letter"});
-    let y=40;
-    doc.setFontSize(16);
-    doc.text(`Weekly Report ${fmtDate(start)} - ${fmtDate(end)}`,40,y);
-    y+=24;
-    doc.setFontSize(11);
-    doc.text(`Total hours: ${totalHours}h · Employees: ${summaryRows.length}`,40,y);
-    y+=24;
-    doc.setFontSize(12);
-    doc.text("Summary by Employee",40,y);
-    y+=18;
-    doc.setFontSize(10);
-    summaryRows.forEach(row=>{
-      if(y>740){doc.addPage();y=40;}
-      doc.text(`${row.emp.name}: ${row.total}h`,40,y);
-      y+=16;
-    });
-    y+=18;
-    doc.setFontSize(12);
-    doc.text("Detailed Hours by Employee and Project",40,y);
-    y+=18;
-    doc.setFontSize(10);
-    rows.forEach(row=>{
-      if(y>740){doc.addPage();y=40;}
-      const line = `${row.emp.name} | ${row.proj.name} | ${dates.map(d=>row.dateHours[d]?row.dateHours[d]+"h":"").join(" | ")} | ${row.total}h`;
-      doc.text(line,40,y);
-      y+=14;
-    });
-    if(y>740){doc.addPage();y=40;}
-    doc.text(`Generated ${new Date().toLocaleDateString()}`,40,y+20);
-    const pdfBuffer = doc.output("arraybuffer");
-    const pdfBase64 = arrayBufferToBase64(pdfBuffer);
-    const boundary = "boundary_1234567890";
-    const emailLines = [];
-    emailLines.push(`From: me`);
-    emailLines.push(`To: ${form.email}`);
-    emailLines.push(`Subject: Weekly Report ${fmtDate(start)} - ${fmtDate(end)}`);
-    emailLines.push("MIME-Version: 1.0");
-    emailLines.push(`Content-Type: multipart/mixed; boundary=${boundary}`);
-    emailLines.push("");
-    emailLines.push(`--${boundary}`);
-    emailLines.push("Content-Type: text/plain; charset=UTF-8");
-    emailLines.push("");
-    emailLines.push(`Please find the weekly report attached for ${fmtDate(start)} - ${fmtDate(end)}.`);
-    emailLines.push("");
-    emailLines.push(`--${boundary}`);
-    emailLines.push("Content-Type: application/pdf; name=weekly-report.pdf");
-    emailLines.push("Content-Transfer-Encoding: base64");
-    emailLines.push("Content-Disposition: attachment; filename=weekly-report.pdf");
-    emailLines.push("");
-    emailLines.push(pdfBase64);
-    emailLines.push("");
-    emailLines.push(`--${boundary}--`);
-    const raw = base64UrlEncode(emailLines.join("\r\n"));
-    try{
-      const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",{
-        method:"POST",
-        headers:{"Authorization":"Bearer "+accessToken,"Content-Type":"application/json"},
-        body:JSON.stringify({raw})
-      });
-      if(!res.ok){
-        const errText = await res.text();
-        console.error(errText);
-        showToast("Email send failed.");
-        setSaving(false);
-        return;
-      }
-      showToast("Weekly report sent ✓");
-      closeModal();
-      setSaving(false);
-    }catch(err){
-      console.error(err);
-      showToast("Email send failed.");
-      setSaving(false);
-    }
+    const hCells=["Employee","Project",...dates.map(d=>fmtDate(d)),"Total"].map(h=>`<th style="background:#1A1A1A;color:#fff;padding:8px 6px;font-size:11px;border:1px solid #333;text-align:center;">${h}</th>`).join("");
+    const dataRows=rows.map((row,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 10px;font-size:12px;font-weight:600;border:1px solid #E8E4DF;">${row.emp.name}</td><td style="padding:8px 10px;font-size:12px;border:1px solid #E8E4DF;">${row.proj.name}</td>${dates.map(d=>`<td style="text-align:center;padding:8px 4px;font-size:12px;border:1px solid #E8E4DF;">${row.dateHours[d]?row.dateHours[d]+"h":""}</td>`).join("")}<td style="text-align:center;padding:8px 4px;font-size:12px;font-weight:700;border:1px solid #E8E4DF;color:#D97941;">${row.total}h</td></tr>`).join("");
+    const summaryHtml=summaryRows.map((row,i)=>`<tr style="background:${i%2===0?"#fff":"#F9F7F5"}"><td style="padding:8px 10px;font-weight:600;border:1px solid #E8E4DF;">${row.emp.name}</td><td style="text-align:right;padding:8px 10px;border:1px solid #E8E4DF;">${row.total}h</td></tr>`).join("");
+    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Weekly Report ${fmtDate(start)} - ${fmtDate(end)}</title><style>body{font-family:sans-serif;margin:0;padding:32px;color:#1A1A1A;}*{box-sizing:border-box;}</style></head><body><div style="border-bottom:3px solid #1A1A1A;padding-bottom:16px;margin-bottom:24px;"><p style="margin:0;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#888;">Weekly Report</p><h1 style="margin:8px 0 0;font-size:26px;font-weight:800;">${fmtDate(start)} – ${fmtDate(end)}</h1><p style="margin:8px 0 0;font-size:13px;color:#888;">Total hours: ${totalHours}h · Employees: ${summaryRows.length}</p></div><h2 style="font-size:14px;font-weight:800;margin:0 0 12px;">Summary by Employee</h2><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:280px;"><tr><th style="background:#1A1A1A;color:#fff;padding:8px 6px;font-size:11px;border:1px solid #333;text-align:left;">Employee</th><th style="background:#1A1A1A;color:#fff;padding:8px 6px;font-size:11px;border:1px solid #333;text-align:right;">Total Hours</th></tr>${summaryHtml}</table></div><h2 style="font-size:14px;font-weight:800;margin:24px 0 12px;">Detailed Hours by Employee and Project</h2><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:600px;"><tr>${hCells}</tr>${dataRows}<tr style="background:#F0EDE9;"><td colspan="${2+dates.length}" style="padding:10px;font-weight:800;border:1px solid #E8E4DF;text-align:right;">Period Total</td><td style="text-align:center;padding:10px;font-weight:800;border:1px solid #E8E4DF;color:#D97941;">${totalHours}h</td></tr></table></div><p style="margin-top:32px;font-size:11px;color:#aaa;">Generated ${new Date().toLocaleDateString()}</p></body></html>`;
+    const blob = new Blob([html],{type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
   }
 
   function exportWeeklyReport(){
@@ -1021,14 +931,16 @@ e(Btn,{variant:"orange",onClick:()=>{setForm({startDate:today(),endDate:today(),
     e(Modal,{show:modal==="weeklyReport",onClose:closeModal,title:"Weekly Report"},
       e(Field,{label:"From"},e(Inp,{type:"date",value:form.startDate||today(),onChange:ev=>sf("startDate",ev.target.value)})),
       e(Field,{label:"To"},e(Inp,{type:"date",value:form.endDate||today(),onChange:ev=>sf("endDate",ev.target.value)})),
-      e(Field,{label:"Recipient Email"},e(Inp,{type:"email",placeholder:"email@example.com",value:form.email||"",onChange:ev=>sf("email",ev.target.value)})),
       e("p",{style:{fontSize:12,color:"#888",marginBottom:16}},"Report shows hours per employee, per project, and total hours in the selected period."),
-      e(Btn,{variant:"dark",disabled:!form.startDate||!form.endDate,onClick:exportWeeklyReport},"📄 Download Weekly Report"),
-      e(Btn,{variant:"orange",disabled:!form.startDate||!form.endDate||!form.email||saving,style:{marginTop:10},onClick:sendWeeklyReportEmail},saving?"Sending…":"✉️ Send Weekly Report"),
+      e("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+        e(Btn,{variant:"dark",disabled:!form.startDate||!form.endDate,onClick:exportWeeklyReport},"📄 Download Weekly Report"),
+        e(Btn,{variant:"orange",disabled:!form.startDate||!form.endDate,style:{marginTop:0},onClick:openWeeklyReport},"🌐 Open Weekly Report")
+      ),
       e("p",{style:{textAlign:"center",fontSize:11,color:"#aaa",marginTop:10}},"Open in browser → Print → Save as PDF")
     ),
 
     e(Modal,{show:modal==="users",onClose:closeModal,title:"Team Access"},
+
       data.users.filter(u=>u.role!=="removed").map(u=>e("div",{key:u.id,style:{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:"1px solid #F5F2EE"}},
         e(Avatar,{name:u.name,size:36}),
         e("div",{style:{flex:1}},e("p",{style:{margin:0,fontWeight:700,fontSize:14}},u.name),e("p",{style:{margin:"2px 0 0",fontSize:11,color:"#888"}},u.email)),
